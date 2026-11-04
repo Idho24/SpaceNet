@@ -1,4 +1,3 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/customer_repository.dart';
@@ -91,11 +90,6 @@ class RegistrationController extends StateNotifier<RegistrationState> {
         status: RegistrationStatus.codeSent,
         debugOtp: _otp.debugCode,
       );
-    } on FirebaseAuthException catch (error) {
-      state = state.copyWith(
-        status: RegistrationStatus.error,
-        errorMessage: _firebaseError(error),
-      );
     } on OtpUnavailableException catch (error) {
       state = state.copyWith(
         status: RegistrationStatus.error,
@@ -151,11 +145,6 @@ class RegistrationController extends StateNotifier<RegistrationState> {
         status: RegistrationStatus.error,
         errorMessage: error.message,
       );
-    } on FirebaseAuthException catch (error) {
-      state = state.copyWith(
-        status: RegistrationStatus.error,
-        errorMessage: _firebaseError(error),
-      );
     } on OtpUnavailableException catch (error) {
       state = state.copyWith(
         status: RegistrationStatus.error,
@@ -173,21 +162,6 @@ class RegistrationController extends StateNotifier<RegistrationState> {
       );
     }
     return false;
-  }
-
-  static String _firebaseError(FirebaseAuthException error) {
-    return switch (error.code) {
-      'invalid-phone-number' =>
-        'Format nomor ponsel tidak valid. Gunakan format internasional.',
-      'too-many-requests' =>
-        'Terlalu banyak permintaan OTP. Coba kembali beberapa saat lagi.',
-      'quota-exceeded' => 'Kuota SMS OTP telah tercapai. Gunakan Firebase Auth Emulator untuk pengujian.',
-      'invalid-verification-code' => 'Kode OTP salah atau sudah kedaluwarsa.',
-      'session-expired' => 'Kode OTP kedaluwarsa. Minta kode baru.',
-      'credential-already-in-use' =>
-        'Nomor ponsel sudah terhubung ke akun lain.',
-      _ => 'Verifikasi ponsel gagal (${error.code}).',
-    };
   }
 }
 

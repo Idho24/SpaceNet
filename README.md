@@ -10,7 +10,7 @@ hubungkan perangkat dengan USB debugging aktif.
 
 ```powershell
 flutter pub get
-flutter run
+flutter run --dart-define-from-file=.env.supabase.local.json
 ```
 
 ## Pemeriksaan
@@ -24,103 +24,51 @@ flutter build apk --debug
 Uji widget mencakup alur login pratinjau, lima tab utama, pembayaran, pengajuan
 tiket, serta seluruh rute fitur pada lebar layar ponsel 320 px.
 
-## Firebase lokal (Phase 3)
+## Supabase setup (versi non-Firebase)
+
+Aplikasi ini sekarang menggunakan Supabase untuk autentikasi, profil pengguna, dan data pelanggan. Konfigurasi lokal disimpan di file `.env.supabase.local.json` dan tidak dipublikasikan ke Git.
 
 ### 1. Buat konfigurasi lokal
 
-Buat `.env.firebase.local.json` di root proyek, lalu isi nilai dari Firebase
-Console. Jangan gunakan placeholder saat menjalankan aplikasi dan jangan commit
-file ini:
-
 ```json
 {
-  "FIREBASE_PROJECT_ID": "nilai-dari-firebase-console",
-  "FIREBASE_API_KEY": "nilai-dari-firebase-console",
-  "FIREBASE_MESSAGING_SENDER_ID": "nilai-dari-firebase-console",
-  "FIREBASE_AUTH_DOMAIN": "nilai-dari-firebase-console",
-  "FIREBASE_STORAGE_BUCKET": "nilai-dari-firebase-console",
-  "FIREBASE_ANDROID_APP_ID": "nilai-dari-firebase-console",
-  "FIREBASE_IOS_APP_ID": "nilai-dari-firebase-console",
-  "FIREBASE_WEB_APP_ID": "nilai-dari-firebase-console",
-  "FIREBASE_IOS_BUNDLE_ID": "nilai-dari-firebase-console",
-  "FIREBASE_MEASUREMENT_ID": "nilai-dari-firebase-console",
-  "GOOGLE_WEB_CLIENT_ID": "OAuth-Web-client-ID",
-  "FIREBASE_APP_CHECK_WEB_SITE_KEY": "reCAPTCHA-v3-site-key",
-  "FIREBASE_MESSAGING_VAPID_KEY": "Web-Push-certificate-key",
-  "FIREBASE_USE_EMULATORS": true,
-  "FIREBASE_ENABLE_APP_CHECK": false,
-  "FIREBASE_EMULATOR_HOST": "127.0.0.1"
+  "SUPABASE_URL": "https://your-project.supabase.co",
+  "SUPABASE_PUBLISHABLE_KEY": "your-publishable-key",
+  "SUPABASE_ENABLE_PHONE_OTP": false
 }
 ```
 
-Save it as an ignored local file such as `.env.firebase.local.json`, then run:
+Simpan file itu di root project, lalu jalankan:
 
 ```powershell
-flutter run --dart-define-from-file=.env.firebase.local.json
+flutter run --dart-define-from-file=.env.supabase.local.json
 ```
 
-`.env.firebase.local.json` sudah dicantumkan dalam `.gitignore`.
+`.env.supabase.local.json` sudah ditambahkan ke `.gitignore`.
+Jangan masukkan `service_role` key atau JWT secret ke aplikasi mobile.
 
-### 2. Atur autentikasi dan emulator
+### 2. Konfigurasi Supabase
 
-Aktifkan Google Sign-In sebagai provider di Firebase Console. Konfigurasikan
-OAuth client sesuai platform: SHA-1/SHA-256 untuk Android, URL scheme dari
-reversed client ID untuk iOS, dan authorized origins untuk Web.
+1. Buat project baru di Supabase.
+2. Jalankan migrasi `supabase/migrations/20261104000000_customer_security.sql` melalui Supabase CLI atau SQL Editor.
+3. Aktifkan Authentication > Providers > Google dan isi OAuth client ID/secret sesuai konfigurasi Google.
+4. Tambahkan `io.spacenet.mobile://login-callback` pada Authentication > URL Configuration > Redirect URLs. Untuk web, tambahkan origin aplikasi web yang dipakai.
+5. Impor data pelanggan ke tabel `customers` menggunakan kredensial administrator dari lingkungan tepercaya, bukan aplikasi mobile. Nomor pelanggan harus E.164.
+6. Migrasi mengaktifkan RLS, membatasi pembacaan data pelanggan pada akun yang sudah tertaut, melarang perubahan tabel oleh client, dan hanya mengizinkan pengaitan lewat RPC `link_customer`.
 
-Untuk uji OTP tanpa mengirim SMS dan Firestore lokal, pasang Firebase CLI lalu
-jalankan Auth dan Firestore Emulator di terminal:
+### 3. OTP dan pengaitan pelanggan
+
+OTP lokal hanya aktif ketika Supabase tidak dikonfigurasi dan tidak dapat menautkan akun backend. Saat Supabase aktif, OTP dinonaktifkan secara default agar konfigurasi yang belum siap tidak mengirim SMS berbayar.
+
+Untuk pengujian tanpa SMS, daftarkan nomor uji dan kode OTP di pengaturan Supabase Auth terlebih dahulu. Setelah itu, aktifkan `SUPABASE_ENABLE_PHONE_OTP` hanya pada konfigurasi lokal. Jika menggunakan provider SMS sungguhan, periksa biaya provider sebelum mengaktifkannya.
+
+Setelah OTP dikonfirmasi oleh Supabase Auth, RPC memverifikasi nomor terkonfirmasi terhadap data pelanggan di database sebelum menyimpan tautan. Aplikasi tidak membaca profil pelanggan sebelum pengaitan berhasil.
+
+### 4. Jalankan aplikasi
 
 ```powershell
-firebase emulators:start --only auth,firestore --project <project-id-anda>
+flutter pub get
+flutter run --dart-define-from-file=.env.supabase.local.json
 ```
 
-Gunakan ID proyek yang sesuai dengan konfigurasi lokal, dan biarkan
-`FIREBASE_USE_EMULATORS` bernilai `true`. Aplikasi mengarahkan Firebase Auth
-dan Firestore ke emulator pada host yang ditentukan oleh
-`FIREBASE_EMULATOR_HOST`. Muat [firestore.rules](./firestore.rules) di emulator
-dan siapkan dokumen `customers/{customer_id}` melalui emulator sebelum menguji
-link pelanggan. Nomor pelanggan harus berformat E.164, misalnya
-`+6283125998929`.
-
-Auth Emulator tidak mengirim SMS produksi. Gunakan nomor uji/OTP yang disiapkan
-melalui alur emulator. Tanpa Firebase configuration, aplikasi memakai
-repository demo dan OTP lokal terpisah; demo OTP hanya untuk pratinjau dan
-tidak dapat menghubungkan akun Firebase atau menulis ke Firestore.
-
-### 3. Jalankan aplikasi
-
-Di terminal lain, dari root proyek:
-
-```powershell
-flutter run --dart-define-from-file=.env.firebase.local.json
-```
-
-Google Sign-In memerlukan konfigurasi provider dan OAuth client yang benar;
-emulator terutama digunakan untuk menguji OTP dan Firestore. Untuk Android
-debug App Check, daftarkan debug token yang dicetak SDK di Firebase Console
-sebelum mengaktifkannya. App Check dilewati saat emulator aktif. Jangan
-nonaktifkan `FIREBASE_USE_EMULATORS` sampai proyek Firebase dan platform OAuth
-siap; SMS produksi tetap dinonaktifkan di aplikasi untuk menghindari biaya tak
-terduga.
-
-### Spark Plan limits
-
-Firestore, Firebase Authentication with Google, FCM, and App Check have free
-usage subject to Firebase quotas and platform setup. Firebase Phone
-Authentication SMS may incur charges, so do not use production SMS when
-requiring a zero-cost test; use the Auth Emulator. Cloud Storage is not enabled:
-the requested 5 GB storage allowance is not available on Spark for current
-Firebase Storage buckets and requires a billing plan. The Storage repository
-and rules are not used by the app. No Cloud Functions are required.
-
-Customer records must be provisioned by a trusted administrator with the phone
-stored in E.164 format. Firestore rules allow a one-time atomic link only after
-the signed-in Firebase account has a verified phone-number claim matching that
-record. Customer details are readable only after the link succeeds; clients
-cannot edit customer business data.
-
-The FCM repository requests notification permission and registers an app
-instance when called. Web builds also need the VAPID key from Firebase Console.
-Keep FCM HTTP v1 service-account credentials on a trusted sender; never put
-them in the mobile app. The client does not send notifications or store device
-tokens in customer documents.
+Aplikasi tetap menyediakan mode demo lokal jika Supabase tidak dikonfigurasi, sehingga UI bisa terus dipakai dalam development tanpa kredensial produksi.

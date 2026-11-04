@@ -207,10 +207,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                           ),
                   ),
                   const SizedBox(height: 14),
-                  _OtpModeNotice(
-                    isDemo: otpRepository.isDemo,
-                    isEmulator: otpRepository.isEmulator,
-                  ),
+                  _OtpModeNotice(description: otpRepository.description),
                   TextButton(
                     onPressed: isBusy ? null : () => context.go('/login'),
                     child: const Text('Kembali ke login'),
@@ -267,10 +264,9 @@ class _OtpDebugCard extends StatelessWidget {
 }
 
 class _OtpModeNotice extends StatelessWidget {
-  final bool isDemo;
-  final bool isEmulator;
+  final String description;
 
-  const _OtpModeNotice({required this.isDemo, required this.isEmulator});
+  const _OtpModeNotice({required this.description});
 
   @override
   Widget build(BuildContext context) {
@@ -291,14 +287,7 @@ class _OtpModeNotice extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              isDemo
-                  ? 'Mode OTP lokal hanya untuk demo dan tidak membuat tautan '
-                        'Firestore. Jangan gunakan sebagai verifikasi production.'
-                  : isEmulator
-                  ? 'Firebase Auth Emulator menangani kode verifikasi lokal '
-                        'tanpa mengirim SMS produksi.'
-                  : 'OTP SMS produksi dinonaktifkan agar tidak menimbulkan '
-                        'biaya. Gunakan Auth Emulator untuk pengujian.',
+              description,
               style: const TextStyle(fontSize: 12, height: 1.5),
             ),
           ),

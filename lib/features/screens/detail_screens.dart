@@ -1,4 +1,3 @@
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -1528,7 +1527,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const _InfoNotice(
             text:
                 'Preferensi kategori berlaku selama sesi ini. Izin perangkat '
-                'dikelola melalui Firebase Cloud Messaging.',
+                'ditangani secara lokal untuk kebutuhan demo aplikasi.',
           ),
         ],
       ),

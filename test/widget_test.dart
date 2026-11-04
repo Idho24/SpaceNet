@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:spacenet/core/routing/app_router.dart';
+import 'package:spacenet/core/supabase/supabase_runtime_config.dart';
 import 'package:spacenet/data/repositories/otp_repository.dart';
 import 'package:spacenet/features/auth/auth_state.dart';
 import 'package:spacenet/features/auth/registration_controller.dart';
@@ -183,6 +184,25 @@ void main() {
       otp.sendCode('+6281255671201'),
       throwsA(isA<OtpUnavailableException>()),
     );
+    expect(otp.debugCode, isNull);
+  });
+
+  test('Supabase phone OTP stays disabled unless explicitly enabled', () {
+    final container = ProviderContainer(
+      overrides: [
+        supabaseRuntimeConfigProvider.overrideWithValue(
+          const SupabaseRuntimeConfig(
+            url: 'https://project.supabase.co',
+            publishableKey: 'public-key',
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final otp = container.read(otpRepositoryProvider);
+    expect(otp, isA<ProductionOtpDisabledRepository>());
+    expect(otp.isDemo, isFalse);
     expect(otp.debugCode, isNull);
   });
 }

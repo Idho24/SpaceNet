@@ -1,16 +1,15 @@
-import 'dart:async';
 import 'dart:math';
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../core/firebase/firebase_runtime_config.dart';
+import '../../core/supabase/supabase_runtime_config.dart';
 import 'customer_repository.dart';
 
 class PhoneVerification {
   final String phoneNumber;
-  final AuthCredential? credential;
+  final Object? credential;
   final bool localMock;
 
   const PhoneVerification({
@@ -24,6 +23,7 @@ abstract interface class OtpRepository {
   bool get isDemo;
   bool get isEmulator;
   String? get debugCode;
+  String get description;
   Future<void> sendCode(String phoneNumber);
   Future<PhoneVerification> verifyCode(String code);
 }
@@ -54,6 +54,10 @@ class MockOtpService implements OtpRepository {
 
   @override
   String? get debugCode => _code;
+
+  @override
+  String get description =>
+      'OTP lokal hanya untuk demo dan tidak dapat menghubungkan akun backend.';
 
   @override
   Future<void> sendCode(String phoneNumber) async {
@@ -103,98 +107,10 @@ class MockOtpService implements OtpRepository {
   }
 }
 
-class FirebasePhoneOtpRepository implements OtpRepository {
-  final FirebaseAuth _auth;
-  String? _phoneNumber;
-  String? _verificationId;
-  PhoneAuthCredential? _automaticallyVerifiedCredential;
-  ConfirmationResult? _webConfirmation;
-
-  FirebasePhoneOtpRepository(this._auth);
-
-  @override
-  bool get isDemo => false;
-
-  @override
-  bool get isEmulator => true;
-
-  @override
-  String? get debugCode => null;
-
-  @override
-  Future<void> sendCode(String phoneNumber) async {
-    final normalizedPhone = normalizePhone(phoneNumber);
-    if (!RegExp(r'^\+[1-9]\d{7,14}$').hasMatch(normalizedPhone)) {
-      throw const FormatException(
-        'Nomor ponsel harus menggunakan format internasional.',
-      );
-    }
-    _phoneNumber = normalizedPhone;
-    _verificationId = null;
-    _automaticallyVerifiedCredential = null;
-
-    if (kIsWeb) {
-      _webConfirmation = await _auth.signInWithPhoneNumber(normalizedPhone);
-      _verificationId = _webConfirmation!.verificationId;
-      return;
-    }
-
-    final completer = Completer<void>();
-    await _auth.verifyPhoneNumber(
-      phoneNumber: normalizedPhone,
-      verificationCompleted: (credential) {
-        _automaticallyVerifiedCredential = credential;
-        if (!completer.isCompleted) completer.complete();
-      },
-      verificationFailed: (error) {
-        if (!completer.isCompleted) completer.completeError(error);
-      },
-      codeSent: (verificationId, forceResendingToken) {
-        _verificationId = verificationId;
-        if (!completer.isCompleted) completer.complete();
-      },
-      codeAutoRetrievalTimeout: (verificationId) {
-        _verificationId = verificationId;
-      },
-      timeout: const Duration(seconds: 60),
-    );
-    await completer.future;
-  }
-
-  @override
-  Future<PhoneVerification> verifyCode(String code) async {
-    if (!RegExp(r'^\d{6}$').hasMatch(code)) {
-      throw const FormatException('Masukkan kode OTP 6 digit.');
-    }
-    final phone = _phoneNumber;
-    if (phone == null) {
-      throw const FormatException('Minta kode OTP terlebih dahulu.');
-    }
-
-    final autoCredential = _automaticallyVerifiedCredential;
-    final verificationId = _verificationId ?? _webConfirmation?.verificationId;
-    if (autoCredential == null &&
-        (verificationId == null || verificationId.isEmpty)) {
-      throw const FormatException('Sesi OTP tidak valid. Minta kode baru.');
-    }
-    final credential =
-        autoCredential ??
-        PhoneAuthProvider.credential(
-          verificationId: verificationId!,
-          smsCode: code,
-        );
-    return PhoneVerification(
-      phoneNumber: phone,
-      credential: credential,
-      localMock: false,
-    );
-  }
-}
-
 class ProductionOtpDisabledRepository implements OtpRepository {
   static const _message =
       'OTP SMS produksi dinonaktifkan agar tidak menimbulkan biaya. '
-      'Gunakan Firebase Auth Emulator untuk pengujian.';
+      'Gunakan mode demo untuk pengujian.';
 
   @override
   bool get isDemo => false;
@@ -206,6 +122,11 @@ class ProductionOtpDisabledRepository implements OtpRepository {
   String? get debugCode => null;
 
   @override
+  String get description =>
+      'OTP SMS dinonaktifkan. Aktifkan secara eksplisit setelah mengatur '
+      'provider atau nomor uji Supabase Auth.';
+
+  @override
   Future<void> sendCode(String phoneNumber) async {
     throw const OtpUnavailableException(_message);
   }
@@ -216,12 +137,76 @@ class ProductionOtpDisabledRepository implements OtpRepository {
   }
 }
 
-final otpRepositoryProvider = Provider<OtpRepository>((ref) {
-  final config = ref.watch(firebaseRuntimeConfigProvider);
-  if (config.isConfigured && config.useEmulators) {
-    return FirebasePhoneOtpRepository(FirebaseAuth.instance);
+class SupabasePhoneOtpRepository implements OtpRepository {
+  final SupabaseClient _client;
+  String? _phoneNumber;
+
+  SupabasePhoneOtpRepository({SupabaseClient? client})
+    : _client = client ?? Supabase.instance.client;
+
+  @override
+  bool get isDemo => false;
+
+  @override
+  bool get isEmulator => false;
+
+  @override
+  String? get debugCode => null;
+
+  @override
+  String get description =>
+      'Kode dikirim melalui provider SMS Supabase yang dikonfigurasi proyek.';
+
+  @override
+  Future<void> sendCode(String phoneNumber) async {
+    final user = _client.auth.currentUser;
+    if (user == null) {
+      throw const OtpUnavailableException(
+        'Masuk terlebih dahulu sebelum memverifikasi nomor ponsel.',
+      );
+    }
+    final normalizedPhone = normalizePhone(phoneNumber);
+    if (!RegExp(r'^\+[1-9]\d{7,14}$').hasMatch(normalizedPhone)) {
+      throw const FormatException(
+        'Nomor ponsel harus menggunakan format internasional.',
+      );
+    }
+    await _client.auth.updateUser(UserAttributes(phone: normalizedPhone));
+    _phoneNumber = normalizedPhone;
   }
-  return config.isConfigured
-      ? ProductionOtpDisabledRepository()
-      : MockOtpService();
+
+  @override
+  Future<PhoneVerification> verifyCode(String code) async {
+    final phone = _phoneNumber;
+    if (phone == null) {
+      throw const FormatException('Minta kode OTP terlebih dahulu.');
+    }
+    final response = await _client.auth.verifyOTP(
+      phone: phone,
+      token: code,
+      type: OtpType.phoneChange,
+    );
+    final user = response.user ?? _client.auth.currentUser;
+    if (user == null ||
+        user.phoneConfirmedAt == null ||
+        user.phone == null ||
+        normalizePhone(user.phone!) != phone) {
+      throw const FormatException(
+        'Supabase belum mengonfirmasi nomor ponsel. Coba verifikasi kembali.',
+      );
+    }
+    _phoneNumber = null;
+    return PhoneVerification(
+      phoneNumber: phone,
+      credential: user,
+      localMock: false,
+    );
+  }
+}
+
+final otpRepositoryProvider = Provider<OtpRepository>((ref) {
+  final config = ref.watch(supabaseRuntimeConfigProvider);
+  if (!config.isConfigured) return MockOtpService();
+  if (!config.enablePhoneOtp) return ProductionOtpDisabledRepository();
+  return SupabasePhoneOtpRepository();
 });

@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class CustomerModel {
   final String customerId;
   final String name;
@@ -31,6 +29,13 @@ class CustomerModel {
     String documentId,
     Map<String, dynamic> data,
   ) {
+    return CustomerModel.fromMap(data, documentId: documentId);
+  }
+
+  factory CustomerModel.fromMap(
+    Map<String, dynamic> data, {
+    String? documentId,
+  }) {
     return CustomerModel(
       customerId: _requiredString(data, 'customer_id', fallback: documentId),
       name: _requiredString(data, 'name'),
@@ -60,8 +65,14 @@ class CustomerModel {
 
   static DateTime _requiredDate(Map<String, dynamic> data, String key) {
     final value = data[key];
-    if (value is Timestamp) return value.toDate();
     if (value is DateTime) return value;
+    if (value is String) {
+      final parsed = DateTime.tryParse(value);
+      if (parsed != null) return parsed;
+    }
+    if (value is int) {
+      return DateTime.fromMillisecondsSinceEpoch(value);
+    }
     throw FormatException('Customer field "$key" is missing or invalid.');
   }
 }

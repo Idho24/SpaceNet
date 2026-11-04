@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/firebase/firebase_runtime_config.dart';
+import '../../core/supabase/supabase_runtime_config.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_components.dart';
 import '../../core/widgets/brand_logo.dart';
@@ -13,7 +13,7 @@ class LoginScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final firebaseConfigured = ref.watch(firebaseRuntimeConfigProvider).isConfigured;
+    final supabaseConfigured = ref.watch(supabaseRuntimeConfigProvider).isConfigured;
     final authState = ref.watch(authNotifierProvider);
     final isLoading = authState.status == AuthStatus.loading;
 
@@ -71,7 +71,7 @@ class LoginScreen extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  if (!firebaseConfigured) ...[
+                  if (!supabaseConfigured) ...[
                     OutlinedButton.icon(
                       onPressed: isLoading
                           ? null
@@ -84,13 +84,13 @@ class LoginScreen extends ConsumerWidget {
                     const SizedBox(height: 14),
                     const _AuthNotice(
                       message:
-                          'Firebase belum dikonfigurasi. Tombol Google hanya berfungsi '
-                          'setelah konfigurasi lokal tersedia; mode demo memakai data lokal.',
+                          'Supabase belum dikonfigurasi. Tombol Google hanya berfungsi '
+                          'setelah proyek Supabase aktif; mode demo memakai data lokal.',
                     ),
                   ] else ...[
                     const _AuthNotice(
                       message:
-                          'Login menggunakan Firebase Authentication. Akun baru akan '
+                          'Login menggunakan Supabase Auth. Akun baru akan '
                           'diminta menghubungkan ID pelanggan dan memverifikasi nomor ponsel.',
                     ),
                   ],

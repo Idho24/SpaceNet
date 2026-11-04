@@ -33,6 +33,7 @@ migrate_working_dir/
 /build/
 /coverage/
 .env.firebase.local.json
+.env.supabase.local.json
 
 # Symbolication related
 app.*.symbols

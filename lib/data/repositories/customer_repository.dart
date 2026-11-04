@@ -1,7 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../core/firebase/firebase_runtime_config.dart';
+import '../../core/supabase/supabase_runtime_config.dart';
 import '../models/customer_model.dart';
 
 class CustomerLinkException implements Exception {
@@ -23,25 +23,34 @@ abstract interface class CustomerRepository {
   });
 }
 
-class FirestoreCustomerRepository implements CustomerRepository {
-  final FirebaseFirestore _firestore;
+class SupabaseCustomerRepository implements CustomerRepository {
+  final SupabaseClient _client;
 
-  FirestoreCustomerRepository(this._firestore);
+  SupabaseCustomerRepository({SupabaseClient? client})
+    : _client = client ?? Supabase.instance.client;
 
   @override
   Future<String?> linkedCustomerId(String uid) async {
-    final document = await _firestore.collection('users').doc(uid).get();
-    final value = document.data()?['customer_id'];
+    final response = await _client
+        .from('profiles')
+        .select('customer_id')
+        .eq('id', uid)
+        .maybeSingle();
+
+    final value = response?['customer_id'];
     return value is String && value.isNotEmpty ? value : null;
   }
 
   @override
   Future<CustomerModel?> getCustomer(String customerId) async {
-    final document =
-        await _firestore.collection('customers').doc(customerId).get();
-    final data = document.data();
-    if (!document.exists || data == null) return null;
-    return CustomerModel.fromFirestore(document.id, data);
+    final response = await _client
+        .from('customers')
+        .select()
+        .eq('customer_id', customerId)
+        .maybeSingle();
+
+    if (response == null) return null;
+    return CustomerModel.fromMap(Map<String, dynamic>.from(response));
   }
 
   @override
@@ -50,32 +59,24 @@ class FirestoreCustomerRepository implements CustomerRepository {
     required String customerId,
     required String verifiedPhone,
   }) async {
-    if (!RegExp(r'^\+[1-9]\d{7,14}$').hasMatch(normalizePhone(verifiedPhone))) {
+    final user = _client.auth.currentUser;
+    if (user == null || user.id != uid) {
       throw const CustomerLinkException(
-        'Nomor ponsel terverifikasi tidak valid.',
+        'Sesi login tidak valid. Silakan masuk kembali.',
       );
     }
-    final customerRef = _firestore.collection('customers').doc(customerId);
-    final userRef = _firestore.collection('users').doc(uid);
-    final batch = _firestore.batch();
-    batch.update(customerRef, {'linked_uid': uid});
-    batch.update(userRef, {
-      'customer_id': customerId,
-      'phone_verified': true,
-      'updated_at': FieldValue.serverTimestamp(),
-    });
+    if (user.phoneConfirmedAt == null ||
+        user.phone == null ||
+        normalizePhone(user.phone!) != normalizePhone(verifiedPhone)) {
+      throw const CustomerLinkException(
+        'Nomor ponsel belum terverifikasi pada akun Supabase.',
+      );
+    }
+
     try {
-      await batch.commit();
-    } on FirebaseException catch (error) {
-      if (error.code == 'permission-denied' ||
-          error.code == 'not-found' ||
-          error.code == 'failed-precondition') {
-        throw const CustomerLinkException(
-          'Data pelanggan tidak dapat dihubungkan. Pastikan ID dan nomor '
-          'terverifikasi sesuai data SpaceNet, dan akun belum terhubung.',
-        );
-      }
-      rethrow;
+      await _client.rpc('link_customer', params: {'p_customer_id': customerId});
+    } on PostgrestException catch (error) {
+      throw CustomerLinkException(error.message);
     }
   }
 }
@@ -97,8 +98,7 @@ class MockCustomerRepository implements CustomerRepository {
   final Map<String, String> _linkedCustomers = {};
 
   @override
-  Future<String?> linkedCustomerId(String uid) async =>
-      _linkedCustomers[uid];
+  Future<String?> linkedCustomerId(String uid) async => _linkedCustomers[uid];
 
   @override
   Future<CustomerModel?> getCustomer(String customerId) async {
@@ -141,14 +141,16 @@ String normalizePhone(String phone) {
 }
 
 final customerRepositoryProvider = Provider<CustomerRepository>((ref) {
-  final config = ref.watch(firebaseRuntimeConfigProvider);
+  final config = ref.watch(supabaseRuntimeConfigProvider);
   if (config.isConfigured) {
-    return FirestoreCustomerRepository(FirebaseFirestore.instance);
+    return SupabaseCustomerRepository();
   }
   return MockCustomerRepository();
 });
 
-final customerProfileProvider =
-    FutureProvider.family<CustomerModel?, String>((ref, customerId) {
+final customerProfileProvider = FutureProvider.family<CustomerModel?, String>((
+  ref,
+  customerId,
+) {
   return ref.watch(customerRepositoryProvider).getCustomer(customerId);
 });
