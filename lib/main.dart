@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/supabase/supabase_runtime_config.dart';
@@ -30,6 +31,34 @@ Future<void> main() async {
       ],
       child: const SpaceNetApp(),
     ),
+  );
+}
+
+/// Fungsi untuk menangani proses Google Sign-In dan autentikasi ke Supabase
+Future<AuthResponse> signInWithGoogle() async {
+  final GoogleSignIn googleSignIn = GoogleSignIn();
+  final googleUser = await googleSignIn.signIn();
+
+  if (googleUser == null) {
+    throw Exception('Proses login Google dibatalkan oleh pengguna.');
+  }
+
+  final googleAuth = await googleUser.authentication;
+  final accessToken = googleAuth.accessToken;
+  final idToken = googleAuth.idToken;
+
+  if (accessToken == null || accessToken.isEmpty) {
+    throw Exception('Gagal mendapatkan Access Token dari Google.');
+  }
+
+  if (idToken == null || idToken.isEmpty) {
+    throw Exception('Gagal mendapatkan ID Token dari Google.');
+  }
+
+  return await Supabase.instance.client.auth.signInWithIdToken(
+    provider: OAuthProvider.google,
+    idToken: idToken,
+    accessToken: accessToken,
   );
 }
 

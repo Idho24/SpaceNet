@@ -40,19 +40,33 @@ abstract interface class AuthRepository {
   Future<AuthSessionUser?> refreshCurrentUser();
 }
 
+SupabaseClient? _safeSupabaseClient() {
+  try {
+    return Supabase.instance.client;
+  } catch (_) {
+    return null;
+  }
+}
+
 class SupabaseAuthRepository implements AuthRepository {
-  final SupabaseClient _client;
+  final SupabaseClient? _client;
   final CustomerRepository customers;
 
   SupabaseAuthRepository({SupabaseClient? client, required this.customers})
-    : _client = client ?? Supabase.instance.client;
+    : _client = client ?? _safeSupabaseClient();
+
+  SupabaseClient get client =>
+      _client ??
+      (throw const CustomerLinkException('Supabase belum diinisialisasi.'));
 
   @override
   bool get isDemo => false;
 
   @override
   AuthSessionUser? get currentSession {
-    final user = _client.auth.currentUser;
+    final c = _client;
+    if (c == null) return null;
+    final user = c.auth.currentUser;
     if (user == null) return null;
     return AuthSessionUser(
       uid: user.id,
@@ -64,16 +78,19 @@ class SupabaseAuthRepository implements AuthRepository {
   }
 
   @override
-  Stream<AuthSessionUser?> get authStateChanges =>
-      _client.auth.onAuthStateChange.asyncMap((state) {
-        final user = state.session?.user;
-        if (user == null) return null;
-        return _sessionForUser(user);
-      });
+  Stream<AuthSessionUser?> get authStateChanges {
+    final c = _client;
+    if (c == null) return const Stream.empty();
+    return c.auth.onAuthStateChange.asyncMap((state) {
+      final user = state.session?.user;
+      if (user == null) return null;
+      return _sessionForUser(user);
+    });
+  }
 
   @override
   Future<void> signInWithGoogle() async {
-    final result = await _client.auth.signInWithOAuth(
+    final result = await client.auth.signInWithOAuth(
       OAuthProvider.google,
       redirectTo: kIsWeb ? null : 'io.spacenet.mobile://login-callback',
     );
@@ -89,7 +106,7 @@ class SupabaseAuthRepository implements AuthRepository {
 
   @override
   Future<void> signOut() async {
-    await _client.auth.signOut();
+    await client.auth.signOut();
   }
 
   @override
@@ -103,7 +120,8 @@ class SupabaseAuthRepository implements AuthRepository {
       );
     }
 
-    final currentUser = _client.auth.currentUser;
+    final c = client;
+    final currentUser = c.auth.currentUser;
     if (currentUser == null) {
       throw const CustomerLinkException('Sesi login berakhir.');
     }
@@ -128,7 +146,9 @@ class SupabaseAuthRepository implements AuthRepository {
 
   @override
   Future<AuthSessionUser?> refreshCurrentUser() async {
-    final user = _client.auth.currentUser;
+    final c = _client;
+    if (c == null) return null;
+    final user = c.auth.currentUser;
     if (user == null) return null;
     return _sessionForUser(user);
   }
@@ -237,11 +257,203 @@ class MockAuthRepository implements AuthRepository {
   }
 }
 
+/// Auth repository untuk mode pengujian (testing mode) dengan Supabase
+/// yang sudah dikonfigurasi. Mendukung login Google (Supabase Auth) DAN
+/// mode demo lokal. Mengizinkan verifikasi OTP lokal (mock) saat
+/// menghubungkan akun pelanggan — sehingga pengujian tidak membutuhkan
+/// SMS provider yang aktif.
+class TestingSupabaseAuthRepository implements AuthRepository {
+  final SupabaseClient? _client;
+  final CustomerRepository customers;
+  final StreamController<AuthSessionUser?> _demoChanges =
+      StreamController<AuthSessionUser?>.broadcast();
+  AuthSessionUser? _demoSession;
+
+  TestingSupabaseAuthRepository({SupabaseClient? client, required this.customers})
+    : _client = client ?? _safeSupabaseClient();
+
+  bool get _isDemoActive => _demoSession != null;
+
+  @override
+  bool get isDemo => _isDemoActive;
+
+  @override
+  AuthSessionUser? get currentSession {
+    if (_isDemoActive) return _demoSession;
+    final c = _client;
+    if (c == null) return null;
+    final user = c.auth.currentUser;
+    if (user == null) return null;
+    return AuthSessionUser(
+      uid: user.id,
+      email: user.email,
+      displayName: user.userMetadata?['full_name'] as String?,
+      photoUrl: user.userMetadata?['avatar_url'] as String?,
+      customerId: null,
+    );
+  }
+
+  @override
+  Stream<AuthSessionUser?> get authStateChanges async* {
+    if (_isDemoActive) {
+      yield _demoSession;
+    }
+    final controller = StreamController<AuthSessionUser?>.broadcast();
+
+    StreamSubscription? subSupabase;
+    final c = _client;
+    if (c != null) {
+      subSupabase = c.auth.onAuthStateChange.listen((state) async {
+        if (_isDemoActive) return;
+        final user = state.session?.user;
+        if (user == null) {
+          controller.add(null);
+        } else {
+          final session = await _sessionForUser(user);
+          controller.add(session);
+        }
+      });
+    }
+
+    final subDemo = _demoChanges.stream.listen((session) {
+      controller.add(session);
+    });
+
+    try {
+      yield* controller.stream;
+    } finally {
+      await subSupabase?.cancel();
+      await subDemo.cancel();
+      await controller.close();
+    }
+  }
+
+  @override
+  Future<void> signInWithGoogle() async {
+    _demoSession = null;
+    final c = _client;
+    if (c == null) {
+      throw StateError('Supabase belum diinisialisasi.');
+    }
+    final result = await c.auth.signInWithOAuth(
+      OAuthProvider.google,
+      redirectTo: kIsWeb ? null : 'io.spacenet.mobile://login-callback',
+    );
+    if (!result) {
+      throw StateError('Google Sign-In gagal dibuka.');
+    }
+  }
+
+  @override
+  Future<AuthSessionUser> signInDemo() async {
+    _demoSession = const AuthSessionUser(
+      uid: 'testing-demo-user',
+      email: 'testing@spacenet.id',
+      displayName: 'Pengguna Uji Coba',
+      photoUrl: null,
+      customerId: null,
+    );
+    _demoChanges.add(_demoSession);
+    return _demoSession!;
+  }
+
+  @override
+  Future<void> signOut() async {
+    if (_isDemoActive) {
+      _demoSession = null;
+      _demoChanges.add(null);
+    } else {
+      await _client?.auth.signOut();
+    }
+  }
+
+  @override
+  Future<AuthSessionUser> linkCustomer({
+    required String customerId,
+    required PhoneVerification verification,
+  }) async {
+    if (_isDemoActive) {
+      final current = _demoSession!;
+      await customers.linkCustomer(
+        uid: current.uid,
+        customerId: customerId,
+        verifiedPhone: normalizePhone(verification.phoneNumber),
+      );
+      _demoSession = AuthSessionUser(
+        uid: current.uid,
+        email: current.email,
+        displayName: current.displayName,
+        photoUrl: current.photoUrl,
+        customerId: customerId,
+      );
+      _demoChanges.add(_demoSession);
+      return _demoSession!;
+    }
+
+    final c = _client;
+    final currentUser = c?.auth.currentUser;
+    if (currentUser == null) {
+      throw const CustomerLinkException('Sesi login berakhir.');
+    }
+
+    await customers.linkCustomer(
+      uid: currentUser.id,
+      customerId: customerId,
+      verifiedPhone: normalizePhone(verification.phoneNumber),
+    );
+
+    return _sessionForUser(currentUser);
+  }
+
+  @override
+  Future<AuthSessionUser?> refreshCurrentUser() async {
+    if (_isDemoActive) {
+      final current = _demoSession;
+      if (current == null) return null;
+      final customerId = await customers.linkedCustomerId(current.uid);
+      _demoSession = AuthSessionUser(
+        uid: current.uid,
+        email: current.email,
+        displayName: current.displayName,
+        photoUrl: current.photoUrl,
+        customerId: customerId,
+      );
+      // Emit perubahan agar router dan listener lain menerima update
+      _demoChanges.add(_demoSession);
+      return _demoSession;
+    }
+    final c = _client;
+    if (c == null) return null;
+    final user = c.auth.currentUser;
+    if (user == null) return null;
+    return _sessionForUser(user);
+  }
+
+  Future<AuthSessionUser> _sessionForUser(User user) async {
+    final customerId = await customers.linkedCustomerId(user.id);
+    return AuthSessionUser(
+      uid: user.id,
+      email: user.email,
+      displayName:
+          user.userMetadata?['full_name'] as String? ??
+          user.userMetadata?['name'] as String?,
+      photoUrl: user.userMetadata?['avatar_url'] as String?,
+      customerId: customerId,
+    );
+  }
+}
+
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
   final config = ref.watch(supabaseRuntimeConfigProvider);
   final customers = ref.watch(customerRepositoryProvider);
-  if (config.isConfigured) {
-    return SupabaseAuthRepository(customers: customers);
+
+  if (!config.isConfigured) {
+    return MockAuthRepository(customers);
   }
-  return MockAuthRepository(customers);
+
+  if (config.isTestingMode) {
+    return TestingSupabaseAuthRepository(customers: customers);
+  }
+
+  return SupabaseAuthRepository(customers: customers);
 });

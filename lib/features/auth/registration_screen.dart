@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_components.dart';
@@ -52,10 +53,21 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
         .read(registrationControllerProvider.notifier)
         .verifyOtp(_otpController.text);
     if (!mounted) return;
-    final state = ref.read(registrationControllerProvider);
+
     if (success) {
-      context.go('/home');
-    } else if (state.errorMessage != null) {
+      // Auth state sudah diperbarui oleh RegistrationController.verifyOtp()
+      // (linkCustomer + refreshCurrentUser). Router redirect akan otomatis
+      // mengarahkan ke /home karena user sudah isCustomerLinked.
+      // Gunakan WidgetsBinding untuk memastikan state sudah propagate
+      // sebelum navigasi.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) context.go('/home');
+      });
+      return;
+    }
+
+    final state = ref.read(registrationControllerProvider);
+    if (state.errorMessage != null) {
       showAppMessage(context, state.errorMessage!);
     }
   }
@@ -128,7 +140,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                           ? 'Masukkan kode OTP 6 digit'
                           : null,
                     ),
-                    if (registration.debugOtp != null) ...[
+                    if (kDebugMode && otpRepository.isDemo && registration.debugOtp != null) ...[
                       const SizedBox(height: 14),
                       _OtpDebugCard(code: registration.debugOtp!),
                     ],
@@ -228,10 +240,11 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
 }
 
 String normalizeRegistrationPhone(String phone) {
-  final digits = phone.replaceAll(RegExp(r'[^0-9+]'), '');
-  if (digits.startsWith('+')) return digits.substring(1);
-  if (digits.startsWith('0')) return '62${digits.substring(1)}';
-  return digits;
+  // Izinkan karakter bintang untuk nomor dummy di database
+  final cleaned = phone.replaceAll(RegExp(r'[^0-9+*]'), '');
+  if (cleaned.startsWith('+')) return cleaned.substring(1);
+  if (cleaned.startsWith('0')) return '62${cleaned.substring(1)}';
+  return cleaned;
 }
 
 class _OtpDebugCard extends StatelessWidget {

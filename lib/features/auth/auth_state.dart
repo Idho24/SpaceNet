@@ -32,7 +32,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   AuthNotifier(this._repository)
     : super(
-        _repository.isDemo
+        _repository.isDemo || _repository.currentSession == null
             ? const AuthState.unauthenticated()
             : const AuthState.loading(),
       ) {

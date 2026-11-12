@@ -16,11 +16,31 @@ import 'package:spacenet/features/auth/auth_state.dart';
 import 'package:spacenet/features/auth/registration_controller.dart';
 import 'package:spacenet/main.dart';
 
+const _offlineSupabaseConfig = SupabaseRuntimeConfig(
+  url: '',
+  publishableKey: '',
+);
+
+ProviderContainer _offlineContainer() => ProviderContainer(
+  overrides: [
+    supabaseRuntimeConfigProvider.overrideWithValue(_offlineSupabaseConfig),
+  ],
+);
+
 void main() {
   testWidgets('SpaceNet app loads splash and login flow', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(const ProviderScope(child: SpaceNetApp()));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          supabaseRuntimeConfigProvider.overrideWithValue(
+            _offlineSupabaseConfig,
+          ),
+        ],
+        child: const SpaceNetApp(),
+      ),
+    );
 
     expect(find.bySemanticsLabel('SpaceNet'), findsOneWidget);
     expect(find.text('Selamat datang'), findsNothing);
@@ -109,7 +129,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final container = ProviderContainer();
+    final container = _offlineContainer();
     addTearDown(container.dispose);
     await _signInAndLinkDemo(tester, container: container);
 
@@ -148,7 +168,7 @@ void main() {
   test(
     'local OTP rejects invalid codes and links only after verification',
     () async {
-      final container = ProviderContainer();
+      final container = _offlineContainer();
       addTearDown(container.dispose);
       await container.read(authNotifierProvider.notifier).signInDemo();
       final registration = container.read(
@@ -171,6 +191,78 @@ void main() {
 
       final code = container.read(registrationControllerProvider).debugOtp!;
       expect(await registration.verifyOtp(code), isTrue);
+      expect(
+        container.read(authNotifierProvider).user?.isCustomerLinked,
+        isTrue,
+      );
+    },
+  );
+
+  testWidgets(
+    'testing mode with Supabase config allows OTP submit and navigates to home',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final container = ProviderContainer(
+        overrides: [
+          supabaseRuntimeConfigProvider.overrideWithValue(
+            const SupabaseRuntimeConfig(
+              url: 'https://project.supabase.co',
+              publishableKey: 'public-key',
+              isTestingMode: true,
+            ),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const SpaceNetApp(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 2400));
+      await tester.pumpAndSettle();
+
+      // Klik masuk mode demo lokal
+      expect(find.text('Masuk mode demo lokal'), findsOneWidget);
+      await tester.tap(find.text('Masuk mode demo lokal'));
+      await tester.pumpAndSettle();
+
+      // Isi customer ID dan nomor ponsel
+      await tester.enterText(find.byType(TextFormField).at(0), '0012995');
+      await tester.enterText(
+        find.byType(TextFormField).at(1),
+        '+6281200001201',
+      );
+      await tester.tap(find.text('Kirim kode verifikasi'));
+      await tester.pumpAndSettle();
+
+      // Kode OTP muncul di debug card
+      final code = container.read(registrationControllerProvider).debugOtp;
+      expect(code, isNotNull);
+
+      // Masukkan kode OTP dan submit
+      await tester.enterText(find.byType(TextFormField).first, code!);
+      await tester.tap(find.text('Verifikasi & hubungkan akun'));
+      await tester.pumpAndSettle();
+
+      for (final widget in find.byType(Text).evaluate()) {
+        final text = (widget.widget as Text).data;
+        if (text != null && text.isNotEmpty) {
+          debugPrint('FOUND TEXT: $text');
+        }
+      }
+
+      // Tampilan aplikasi (Beranda / HomeScreen) berhasil muncul!
+      expect(find.text('Beranda'), findsWidgets);
+      expect(find.text('Tagihan'), findsWidgets);
+      expect(find.text('LANGGANAN AKTIF'), findsOneWidget);
+      expect(find.text('Home Fiber 200 Mbps'), findsOneWidget);
       expect(
         container.read(authNotifierProvider).user?.isCustomerLinked,
         isTrue,
@@ -211,7 +303,7 @@ Future<ProviderContainer> _signInAndLinkDemo(
   WidgetTester tester, {
   ProviderContainer? container,
 }) async {
-  final providers = container ?? ProviderContainer();
+  final providers = container ?? _offlineContainer();
   if (container == null) addTearDown(providers.dispose);
   await tester.pumpWidget(
     UncontrolledProviderScope(container: providers, child: const SpaceNetApp()),

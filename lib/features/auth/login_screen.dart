@@ -71,7 +71,7 @@ class LoginScreen extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  if (!supabaseConfigured) ...[
+                  if (!supabaseConfigured || ref.watch(supabaseRuntimeConfigProvider).isTestingMode) ...[
                     OutlinedButton.icon(
                       onPressed: isLoading
                           ? null
@@ -84,8 +84,8 @@ class LoginScreen extends ConsumerWidget {
                     const SizedBox(height: 14),
                     const _AuthNotice(
                       message:
-                          'Supabase belum dikonfigurasi. Tombol Google hanya berfungsi '
-                          'setelah proyek Supabase aktif; mode demo memakai data lokal.',
+                          'Mode pengujian aktif: Gunakan data di database Supabase '
+                          'dengan verifikasi OTP lokal (mock).',
                     ),
                   ] else ...[
                     const _AuthNotice(

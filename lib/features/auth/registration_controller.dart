@@ -68,7 +68,8 @@ class RegistrationController extends StateNotifier<RegistrationState> {
       return;
     }
     final normalizedPhone = normalizePhone(phoneNumber);
-    if (!RegExp(r'^\+[1-9]\d{7,14}$').hasMatch(normalizedPhone)) {
+    final isMasked = phoneNumber.contains('*');
+    if (!isMasked && !RegExp(r'^\+[1-9]\d{7,14}$').hasMatch(normalizedPhone)) {
       state = state.copyWith(
         status: RegistrationStatus.error,
         errorMessage: 'Masukkan nomor ponsel dengan kode negara, misalnya +62.',
@@ -80,12 +81,17 @@ class RegistrationController extends StateNotifier<RegistrationState> {
     state = state.copyWith(
       status: RegistrationStatus.sendingCode,
       customerId: normalizedCustomerId,
-      phoneNumber: normalizedPhone,
+      phoneNumber: isMasked ? phoneNumber.trim() : normalizedPhone,
       clearDebugOtp: true,
       clearError: true,
     );
     try {
-      await _otp.sendCode(normalizedPhone);
+      // Pass customer ID ke TestingOtpService untuk validasi database
+      final otp = _otp;
+      if (otp is TestingOtpService) {
+        otp.setCustomerId(normalizedCustomerId);
+      }
+      await _otp.sendCode(isMasked ? phoneNumber.trim() : normalizedPhone);
       state = state.copyWith(
         status: RegistrationStatus.codeSent,
         debugOtp: _otp.debugCode,
