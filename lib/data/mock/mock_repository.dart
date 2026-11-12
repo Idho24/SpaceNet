@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 enum InvoiceStatus { unpaid, paid, expired }
@@ -24,6 +26,8 @@ class MockTicket {
   final String status;
   final String date;
   final String description;
+  final String? photoName;
+  final Uint8List? photoBytes;
 
   const MockTicket({
     required this.id,
@@ -31,6 +35,8 @@ class MockTicket {
     required this.status,
     required this.date,
     required this.description,
+    this.photoName,
+    this.photoBytes,
   });
 }
 
@@ -48,6 +54,18 @@ class MockTransaction {
     required this.date,
     required this.method,
     required this.amount,
+    required this.status,
+  });
+}
+
+class MockPackageChangeRequest {
+  final String id;
+  final String packageName;
+  final String status;
+
+  const MockPackageChangeRequest({
+    required this.id,
+    required this.packageName,
     required this.status,
   });
 }
@@ -87,6 +105,8 @@ class MockRepository {
     ),
   ];
 
+  final List<MockPackageChangeRequest> _packageChangeRequests = [];
+
   final List<MockTransaction> transactions = const [
     MockTransaction(
       id: 'TRX-009182',
@@ -108,6 +128,8 @@ class MockRepository {
 
   List<MockInvoice> get invoices => List.unmodifiable(_invoices);
   List<MockTicket> get tickets => List.unmodifiable(_tickets);
+  List<MockPackageChangeRequest> get packageChangeRequests =>
+      List.unmodifiable(_packageChangeRequests);
   MockInvoice? get currentInvoice => _invoices
       .where((invoice) => invoice.status == InvoiceStatus.unpaid)
       .firstOrNull;
@@ -125,6 +147,8 @@ class MockRepository {
   MockTicket createTicket({
     required String category,
     required String description,
+    String? photoName,
+    Uint8List? photoBytes,
   }) {
     final ticket = MockTicket(
       id: 'SPN-${2042 + _tickets.length}',
@@ -132,9 +156,21 @@ class MockRepository {
       status: 'Menunggu',
       date: 'Baru saja',
       description: description,
+      photoName: photoName,
+      photoBytes: photoBytes,
     );
     _tickets.insert(0, ticket);
     return ticket;
+  }
+
+  MockPackageChangeRequest submitPackageChangeRequest(String packageName) {
+    final request = MockPackageChangeRequest(
+      id: 'PKG-${_packageChangeRequests.length + 1}',
+      packageName: packageName,
+      status: 'Menunggu konfirmasi',
+    );
+    _packageChangeRequests.insert(0, request);
+    return request;
   }
 
   MockInvoice? invoiceById(String id) {
@@ -161,6 +197,8 @@ class MockRepository {
       status: status,
       date: old.date,
       description: old.description,
+      photoName: old.photoName,
+      photoBytes: old.photoBytes,
     );
     _tickets[index] = updated;
     return updated;

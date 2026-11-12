@@ -15,6 +15,19 @@ class AuthSessionUser {
   final String? photoUrl;
   final String? customerId;
 
+  factory AuthSessionUser.fromSupabaseUser(User user, {String? customerId}) {
+    final metadata = user.userMetadata ?? const <String, dynamic>{};
+    return AuthSessionUser(
+      uid: user.id,
+      email: user.email,
+      displayName:
+          _nonEmptyString(metadata['full_name']) ??
+          _nonEmptyString(metadata['name']),
+      photoUrl: metadata['avatar_url'] as String?,
+      customerId: customerId,
+    );
+  }
+
   const AuthSessionUser({
     required this.uid,
     required this.email,
@@ -26,6 +39,14 @@ class AuthSessionUser {
   bool get isCustomerLinked => customerId != null;
 }
 
+String? _nonEmptyString(Object? value) {
+  if (value is! String || value.trim().isEmpty) return null;
+  return value.trim();
+}
+
+String _googleOAuthRedirectTo() =>
+    kIsWeb ? Uri.base.origin : 'io.spacenet.mobile://login-callback';
+
 abstract interface class AuthRepository {
   bool get isDemo;
   AuthSessionUser? get currentSession;
@@ -33,6 +54,7 @@ abstract interface class AuthRepository {
   Future<void> signInWithGoogle();
   Future<AuthSessionUser> signInDemo();
   Future<void> signOut();
+  Future<AuthSessionUser> updateDisplayName(String displayName);
   Future<AuthSessionUser> linkCustomer({
     required String customerId,
     required PhoneVerification verification,
@@ -68,13 +90,7 @@ class SupabaseAuthRepository implements AuthRepository {
     if (c == null) return null;
     final user = c.auth.currentUser;
     if (user == null) return null;
-    return AuthSessionUser(
-      uid: user.id,
-      email: user.email,
-      displayName: user.userMetadata?['full_name'] as String?,
-      photoUrl: user.userMetadata?['avatar_url'] as String?,
-      customerId: null,
-    );
+    return AuthSessionUser.fromSupabaseUser(user);
   }
 
   @override
@@ -92,7 +108,7 @@ class SupabaseAuthRepository implements AuthRepository {
   Future<void> signInWithGoogle() async {
     final result = await client.auth.signInWithOAuth(
       OAuthProvider.google,
-      redirectTo: kIsWeb ? null : 'io.spacenet.mobile://login-callback',
+      redirectTo: _googleOAuthRedirectTo(),
     );
     if (!result) {
       throw StateError('Google Sign-In gagal dibuka.');
@@ -107,6 +123,18 @@ class SupabaseAuthRepository implements AuthRepository {
   @override
   Future<void> signOut() async {
     await client.auth.signOut();
+  }
+
+  @override
+  Future<AuthSessionUser> updateDisplayName(String displayName) async {
+    final response = await client.auth.updateUser(
+      UserAttributes(data: {'full_name': displayName}),
+    );
+    final user = response.user;
+    if (user == null) {
+      throw StateError('Supabase tidak mengembalikan profil yang diperbarui.');
+    }
+    return _sessionForUser(user);
   }
 
   @override
@@ -155,15 +183,7 @@ class SupabaseAuthRepository implements AuthRepository {
 
   Future<AuthSessionUser> _sessionForUser(User user) async {
     final customerId = await customers.linkedCustomerId(user.id);
-    return AuthSessionUser(
-      uid: user.id,
-      email: user.email,
-      displayName:
-          user.userMetadata?['full_name'] as String? ??
-          user.userMetadata?['name'] as String?,
-      photoUrl: user.userMetadata?['avatar_url'] as String?,
-      customerId: customerId,
-    );
+    return AuthSessionUser.fromSupabaseUser(user, customerId: customerId);
   }
 }
 
@@ -211,6 +231,23 @@ class MockAuthRepository implements AuthRepository {
   Future<void> signOut() async {
     _session = null;
     _changes.add(null);
+  }
+
+  @override
+  Future<AuthSessionUser> updateDisplayName(String displayName) async {
+    final current = _session;
+    if (current == null) {
+      throw const CustomerLinkException('Sesi login berakhir.');
+    }
+    _session = AuthSessionUser(
+      uid: current.uid,
+      email: current.email,
+      displayName: displayName,
+      photoUrl: current.photoUrl,
+      customerId: current.customerId,
+    );
+    _changes.add(_session);
+    return _session!;
   }
 
   @override
@@ -284,13 +321,7 @@ class TestingSupabaseAuthRepository implements AuthRepository {
     if (c == null) return null;
     final user = c.auth.currentUser;
     if (user == null) return null;
-    return AuthSessionUser(
-      uid: user.id,
-      email: user.email,
-      displayName: user.userMetadata?['full_name'] as String?,
-      photoUrl: user.userMetadata?['avatar_url'] as String?,
-      customerId: null,
-    );
+    return AuthSessionUser.fromSupabaseUser(user);
   }
 
   @override
@@ -337,7 +368,7 @@ class TestingSupabaseAuthRepository implements AuthRepository {
     }
     final result = await c.auth.signInWithOAuth(
       OAuthProvider.google,
-      redirectTo: kIsWeb ? null : 'io.spacenet.mobile://login-callback',
+      redirectTo: _googleOAuthRedirectTo(),
     );
     if (!result) {
       throw StateError('Google Sign-In gagal dibuka.');
@@ -365,6 +396,35 @@ class TestingSupabaseAuthRepository implements AuthRepository {
     } else {
       await _client?.auth.signOut();
     }
+  }
+
+  @override
+  Future<AuthSessionUser> updateDisplayName(String displayName) async {
+    if (_isDemoActive) {
+      final current = _demoSession!;
+      _demoSession = AuthSessionUser(
+        uid: current.uid,
+        email: current.email,
+        displayName: displayName,
+        photoUrl: current.photoUrl,
+        customerId: current.customerId,
+      );
+      _demoChanges.add(_demoSession);
+      return _demoSession!;
+    }
+
+    final c = _client;
+    if (c == null) {
+      throw StateError('Supabase belum diinisialisasi.');
+    }
+    final response = await c.auth.updateUser(
+      UserAttributes(data: {'full_name': displayName}),
+    );
+    final user = response.user;
+    if (user == null) {
+      throw StateError('Supabase tidak mengembalikan profil yang diperbarui.');
+    }
+    return _sessionForUser(user);
   }
 
   @override
@@ -431,15 +491,7 @@ class TestingSupabaseAuthRepository implements AuthRepository {
 
   Future<AuthSessionUser> _sessionForUser(User user) async {
     final customerId = await customers.linkedCustomerId(user.id);
-    return AuthSessionUser(
-      uid: user.id,
-      email: user.email,
-      displayName:
-          user.userMetadata?['full_name'] as String? ??
-          user.userMetadata?['name'] as String?,
-      photoUrl: user.userMetadata?['avatar_url'] as String?,
-      customerId: customerId,
-    );
+    return AuthSessionUser.fromSupabaseUser(user, customerId: customerId);
   }
 }
 

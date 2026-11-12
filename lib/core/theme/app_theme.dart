@@ -88,6 +88,16 @@ class AppTheme {
           TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
         ),
       ),
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: _SpaceNetPageTransitionsBuilder(),
+          TargetPlatform.fuchsia: _SpaceNetPageTransitionsBuilder(),
+          TargetPlatform.iOS: _SpaceNetPageTransitionsBuilder(),
+          TargetPlatform.linux: _SpaceNetPageTransitionsBuilder(),
+          TargetPlatform.macOS: _SpaceNetPageTransitionsBuilder(),
+          TargetPlatform.windows: _SpaceNetPageTransitionsBuilder(),
+        },
+      ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: primaryBlue,
@@ -118,6 +128,35 @@ class AppTheme {
           horizontal: 16,
           vertical: 16,
         ),
+      ),
+    );
+  }
+}
+
+class _SpaceNetPageTransitionsBuilder extends PageTransitionsBuilder {
+  const _SpaceNetPageTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    final curvedAnimation = CurvedAnimation(
+      parent: animation,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    return FadeTransition(
+      opacity: curvedAnimation,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.035),
+          end: Offset.zero,
+        ).animate(curvedAnimation),
+        child: child,
       ),
     );
   }

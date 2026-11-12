@@ -1,12 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_components.dart';
 import '../../core/widgets/brand_logo.dart';
 import '../../data/mock/mock_repository.dart';
 import '../../data/repositories/push_notification_repository.dart';
+
+Future<void> _copyToClipboard(
+  BuildContext context,
+  String text,
+  String itemName,
+) async {
+  try {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (context.mounted) showAppMessage(context, '$itemName disalin.');
+  } on PlatformException catch (error) {
+    if (context.mounted) {
+      showAppMessage(context, '$itemName gagal disalin. ${error.message ?? ''}');
+    }
+  } on MissingPluginException {
+    if (context.mounted) {
+      showAppMessage(context, 'Fitur salin tidak tersedia di perangkat ini.');
+    }
+  }
+}
 
 class InvoiceDetailScreen extends ConsumerWidget {
   final String invoiceId;
@@ -65,12 +86,16 @@ class InvoiceDetailScreen extends ConsumerWidget {
                   )
                 else
                   OutlinedButton.icon(
-                    onPressed: () => showAppMessage(
+                    onPressed: () => _copyToClipboard(
                       context,
-                      'Rincian invoice siap dibagikan setelah backend pembayaran tersedia.',
+                      'Invoice: ${invoice.id}\n'
+                      'Periode: ${invoice.period}\n'
+                      'Total: ${formatRupiah(invoice.amount)}\n'
+                      'Status: Lunas',
+                      'Rincian invoice',
                     ),
-                    icon: const Icon(Icons.share_outlined),
-                    label: const Text('Bagikan invoice'),
+                    icon: const Icon(Icons.copy_outlined),
+                    label: const Text('Salin rincian invoice'),
                   ),
               ],
             ),
@@ -236,15 +261,33 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
                   _PaymentInstruction(method: _method),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
-                    onPressed: () => showAppMessage(
-                      context,
+                    onPressed: _method == 'QRIS'
+                        ? () => showAppMessage(
+                            context,
+                            'QRIS belum tersedia karena payment gateway belum dikonfigurasi. '
+                            'Instruksi demo ini tidak dapat digunakan untuk membayar.',
+                          )
+                        : () => _copyToClipboard(
+                            context,
+                            _method == 'Virtual Account'
+                                ? 'Invoice: ${invoice.id}\n'
+                                      'Metode: Virtual Account\n'
+                                      'Nomor VA: 8808 0012 9950 2026\n'
+                                      'Jumlah: ${formatRupiah(invoice.amount)}'
+                                : 'Invoice: ${invoice.id}\n'
+                                      'Metode: E-wallet\n'
+                                      'Jumlah: ${formatRupiah(invoice.amount)}',
+                            'Instruksi pembayaran',
+                          ),
+                    icon: Icon(
                       _method == 'QRIS'
-                          ? 'Kode QR demo siap dipindai setelah gateway dikonfigurasi.'
-                          : 'Nomor pembayaran demo berhasil disalin.',
+                          ? Icons.info_outline
+                          : Icons.copy_outlined,
                     ),
-                    icon: const Icon(Icons.copy),
                     label: Text(
-                      _method == 'QRIS' ? 'Lihat kode QR' : 'Salin instruksi',
+                      _method == 'QRIS'
+                          ? 'Info ketersediaan QRIS'
+                          : 'Salin instruksi',
                     ),
                   ),
                 ],
@@ -357,15 +400,10 @@ class _PaymentInstruction extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           if (method == 'QRIS')
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Icon(
-                  Icons.qr_code_2_rounded,
-                  size: 120,
-                  color: AppTheme.darkNavy,
-                ),
-              ),
+            const Text(
+              'Kode QR belum tersedia karena payment gateway belum dikonfigurasi. '
+              'Tagihan ini belum dapat dibayar melalui QRIS.',
+              style: TextStyle(color: AppTheme.textSecondary, height: 1.4),
             )
           else
             Text(
@@ -393,6 +431,41 @@ class UpgradeScreen extends StatefulWidget {
 
 class _UpgradeScreenState extends State<UpgradeScreen> {
   String _selectedPackage = 'Home Fiber 300 Mbps';
+  MockPackageChangeRequest? _request;
+
+  Future<void> _submitRequest() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Ajukan perubahan paket?'),
+        content: Text(
+          'Ajukan $_selectedPackage untuk ditinjau oleh tim SpaceNet.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Kirim pengajuan'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final request = ProviderScope.containerOf(
+      context,
+    ).read(mockRepositoryProvider).submitPackageChangeRequest(
+      _selectedPackage,
+    );
+    setState(() => _request = request);
+    showAppMessage(
+      context,
+      'Pengajuan ${request.id} tersimpan di pratinjau. Paket belum berubah.',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -433,27 +506,35 @@ class _UpgradeScreenState extends State<UpgradeScreen> {
           ),
           const SizedBox(height: 12),
           ElevatedButton(
-            onPressed: () => showDialog<void>(
-              context: context,
-              builder: (context) => AlertDialog(
-                title: const Text('Pengajuan paket'),
-                content: Text(
-                  'Pilihan $_selectedPackage akan dikirim untuk ditinjau. '
-                  'Fitur ini masih pratinjau dan belum mengubah langganan.',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Tutup'),
+            onPressed: _submitRequest,
+            child: const Text('Ajukan perubahan paket'),
+          ),
+          if (_request case final request?) ...[
+            const SizedBox(height: 14),
+            SurfaceCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Pengajuan ${request.id}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(request.packageName),
+                  const SizedBox(height: 4),
+                  Text(
+                    request.status,
+                    style: const TextStyle(color: AppTheme.textSecondary),
                   ),
                 ],
               ),
             ),
-            child: const Text('Ajukan perubahan paket'),
-          ),
+          ],
           const SizedBox(height: 12),
           const _InfoNotice(
-            text: 'Harga dan ketersediaan paket perlu dikonfirmasi SpaceNet sebelum diterapkan.',
+            text:
+                'Pengajuan demo tersimpan di perangkat ini. Harga dan perubahan '
+                'paket tetap perlu dikonfirmasi melalui backend SpaceNet.',
           ),
         ],
       ),
@@ -540,13 +621,44 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
   final _formKey = GlobalKey<FormState>();
   final _descriptionController = TextEditingController();
   String _category = 'Internet lambat';
-  bool _photoAttached = false;
+  String? _photoName;
+  Uint8List? _photoBytes;
   bool _submitting = false;
 
   @override
   void dispose() {
     _descriptionController.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickPhoto() async {
+    try {
+      final image = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1600,
+        imageQuality: 85,
+      );
+      if (image == null) return;
+
+      final bytes = await image.readAsBytes();
+      if (bytes.isEmpty || bytes.length > 5 * 1024 * 1024) {
+        if (mounted) {
+          showAppMessage(context, 'Foto harus lebih dari 0 dan maksimal 5 MB.');
+        }
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _photoName = image.name;
+        _photoBytes = bytes;
+      });
+    } on PlatformException catch (error) {
+      if (mounted) {
+        showAppMessage(context, 'Foto tidak dapat dipilih. ${error.message ?? ''}');
+      }
+    } on Exception catch (error) {
+      if (mounted) showAppMessage(context, 'Foto tidak dapat dibaca. $error');
+    }
   }
 
   Future<void> _submit() async {
@@ -559,6 +671,8 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
         .createTicket(
           category: _category,
           description: _descriptionController.text.trim(),
+          photoName: _photoName,
+          photoBytes: _photoBytes,
         );
     context.go('/tickets/${ticket.id}');
   }
@@ -622,26 +736,43 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
-              onPressed: () => setState(() => _photoAttached = !_photoAttached),
+              onPressed: _photoBytes == null
+                  ? _pickPhoto
+                  : () => setState(() {
+                      _photoName = null;
+                      _photoBytes = null;
+                    }),
               icon: Icon(
-                _photoAttached
-                    ? Icons.check_circle_outline
+                _photoBytes != null
+                    ? Icons.delete_outline
                     : Icons.add_a_photo_outlined,
               ),
               label: Text(
-                _photoAttached
-                    ? 'Foto contoh terlampir'
-                    : 'Lampirkan foto (pratinjau)',
+                _photoBytes != null ? 'Hapus foto' : 'Pilih foto',
               ),
             ),
-            if (_photoAttached)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: Text(
-                  'Lampiran foto hanya penanda visual; unggahan belum tersedia.',
-                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            if (_photoBytes case final photoBytes?) ...[
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Image.memory(
+                  photoBytes,
+                  height: 180,
+                  fit: BoxFit.cover,
                 ),
               ),
+              if (_photoName case final photoName?)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    photoName,
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+            ],
             const SizedBox(height: 20),
             ElevatedButton(
               onPressed: _submitting ? null : _submit,
@@ -658,7 +789,9 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
             ),
             const SizedBox(height: 10),
             const _InfoNotice(
-              text: 'Tiket pada pratinjau ini hanya tersimpan sementara di memori aplikasi.',
+              text:
+                  'Tiket dan foto pada pratinjau tersimpan sementara di aplikasi, '
+                  'belum dikirim ke server.',
             ),
           ],
         ),
@@ -753,6 +886,23 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                         ticket.description,
                         style: const TextStyle(height: 1.5),
                       ),
+                      if (ticket.photoBytes case final photoBytes?) ...[
+                        const SizedBox(height: 14),
+                        Text(
+                          ticket.photoName ?? 'Lampiran foto',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.memory(
+                            photoBytes,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -983,21 +1133,32 @@ class TransactionDetailScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: 18),
                 OutlinedButton.icon(
-                  onPressed: () => showAppMessage(
+                  onPressed: () => _copyToClipboard(
                     context,
-                    'Resi demo disiapkan. Ekspor PDF tersedia setelah backend terhubung.',
+                    'Resi: ${transaction.id}\n'
+                    'Invoice: ${transaction.invoiceId}\n'
+                    'Tanggal: ${transaction.date}\n'
+                    'Metode: ${transaction.method}\n'
+                    'Jumlah: ${formatRupiah(transaction.amount)}\n'
+                    'Status: ${transaction.status}',
+                    'Resi transaksi',
                   ),
-                  icon: const Icon(Icons.download_outlined),
-                  label: const Text('Unduh resi'),
+                  icon: const Icon(Icons.copy_outlined),
+                  label: const Text('Salin resi'),
                 ),
                 const SizedBox(height: 10),
                 ElevatedButton.icon(
-                  onPressed: () => showAppMessage(
+                  onPressed: () => _copyToClipboard(
                     context,
-                    'Fitur berbagi resi akan memakai file transaksi terverifikasi.',
+                    'Bukti pembayaran SpaceNet\n'
+                    'Transaksi: ${transaction.id}\n'
+                    'Invoice: ${transaction.invoiceId}\n'
+                    'Jumlah: ${formatRupiah(transaction.amount)}\n'
+                    'Status: ${transaction.status}',
+                    'Bukti pembayaran',
                   ),
-                  icon: const Icon(Icons.share_outlined),
-                  label: const Text('Bagikan bukti pembayaran'),
+                  icon: const Icon(Icons.copy_outlined),
+                  label: const Text('Salin bukti pembayaran'),
                 ),
               ],
             ),

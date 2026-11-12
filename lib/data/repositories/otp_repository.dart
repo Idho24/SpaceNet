@@ -265,20 +265,18 @@ class TestingOtpService implements OtpRepository {
           );
         }
       } on PostgrestException catch (e) {
-        // Jika RPC belum ada, coba query langsung ke tabel customers
-        if (e.message.contains('function') &&
-            e.message.contains('does not exist')) {
-          if (kDebugMode) {
-            debugPrint(
-              'validate_customer_phone RPC not found, trying direct query.',
-            );
-          }
-          await _validateCustomerPhoneDirect(c, cid, normalizedPhone);
-        } else {
-          throw FormatException(
-            'Gagal memvalidasi data pelanggan: ${e.message}',
+        if (e.code == 'PGRST202' ||
+            (e.message.contains('function') &&
+                e.message.contains('does not exist'))) {
+          throw const FormatException(
+            'Validasi pelanggan mode pengujian belum tersedia di Supabase. '
+            'Terapkan migrasi 20261111000000_testing_link_customer.sql '
+            'pada project pengujian.',
           );
         }
+        throw FormatException(
+          'Gagal memvalidasi data pelanggan: ${e.message}',
+        );
       }
     }
 
@@ -290,51 +288,6 @@ class TestingOtpService implements OtpRepository {
     _failedAttempts = 0;
     if (kDebugMode) {
       debugPrint('SpaceNet testing OTP: $_code (for $normalizedPhone)');
-    }
-  }
-
-  /// Validasi langsung ke tabel customers jika RPC belum ada.
-  Future<void> _validateCustomerPhoneDirect(
-    SupabaseClient client,
-    String customerId,
-    String normalizedPhone,
-  ) async {
-    try {
-      final response = await client
-          .from('customers')
-          .select('customer_id, phone')
-          .eq('customer_id', customerId)
-          .maybeSingle();
-
-      if (response == null) {
-        throw const FormatException(
-          'ID pelanggan tidak ditemukan di database.',
-        );
-      }
-
-      final dbPhone = response['phone'] as String?;
-      if (dbPhone == null || dbPhone.isEmpty) {
-        throw const FormatException(
-          'Data nomor ponsel pelanggan tidak tersedia di database.',
-        );
-      }
-
-      // Bandingkan nomor ponsel: normalisasi kedua sisi
-      if (normalizePhone(dbPhone) != normalizedPhone) {
-        throw const FormatException(
-          'ID pelanggan dan nomor ponsel tidak cocok. '
-          'Periksa data yang terdaftar di database.',
-        );
-      }
-    } on FormatException {
-      rethrow;
-    } on PostgrestException catch (e) {
-      // Jika tabel customers tidak bisa diakses (RLS), lanjutkan tanpa validasi
-      if (kDebugMode) {
-        debugPrint(
-          'Direct query to customers table failed (possibly RLS): ${e.message}',
-        );
-      }
     }
   }
 

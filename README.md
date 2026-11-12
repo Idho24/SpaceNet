@@ -13,6 +13,12 @@ flutter pub get
 flutter run --dart-define-from-file=.env.supabase.local.json
 ```
 
+Untuk pengujian login Google di web, gunakan port tetap:
+
+```powershell
+flutter run -d chrome --web-port 3000 --dart-define-from-file=.env.supabase.local.json
+```
+
 ## Pemeriksaan
 
 ```powershell
@@ -51,10 +57,11 @@ Jangan masukkan `service_role` key atau JWT secret ke aplikasi mobile.
 
 1. Buat project baru di Supabase.
 2. Jalankan migrasi `supabase/migrations/20261104000000_customer_security.sql` melalui Supabase CLI atau SQL Editor.
-3. Aktifkan Authentication > Providers > Google dan isi OAuth client ID/secret sesuai konfigurasi Google.
-4. Tambahkan `io.spacenet.mobile://login-callback` pada Authentication > URL Configuration > Redirect URLs. Untuk web, tambahkan origin aplikasi web yang dipakai.
-5. Impor data pelanggan ke tabel `customers` menggunakan kredensial administrator dari lingkungan tepercaya, bukan aplikasi mobile. Nomor pelanggan harus E.164.
-6. Migrasi mengaktifkan RLS, membatasi pembacaan data pelanggan pada akun yang sudah tertaut, melarang perubahan tabel oleh client, dan hanya mengizinkan pengaitan lewat RPC `link_customer`.
+3. Jika menjalankan `SUPABASE_TESTING_MODE=true`, jalankan juga `supabase/migrations/20261111000000_testing_link_customer.sql` hanya pada project pengujian terpisah. Migrasi ini menyediakan validasi OTP lokal dan pengaitan tanpa OTP; jangan jalankan di production.
+4. Aktifkan Authentication > Providers > Google dan isi OAuth client ID/secret sesuai konfigurasi Google.
+5. Tambahkan `io.spacenet.mobile://login-callback` pada Authentication > URL Configuration > Redirect URLs. Untuk web lokal dengan perintah di atas, tambahkan `http://localhost:3000/**`. Aplikasi mengarahkan callback OAuth ke origin web yang sedang digunakan.
+6. Impor data pelanggan ke tabel `customers` menggunakan kredensial administrator dari lingkungan tepercaya, bukan aplikasi mobile. Nomor pelanggan harus E.164.
+7. Migrasi production mengaktifkan RLS, membatasi pembacaan data pelanggan pada akun yang sudah tertaut, melarang perubahan tabel oleh client, dan hanya mengizinkan pengaitan lewat RPC `link_customer`.
 
 ### 3. OTP dan pengaitan pelanggan
 
@@ -63,6 +70,7 @@ OTP lokal hanya aktif ketika Supabase tidak dikonfigurasi dan tidak dapat menaut
 Untuk pengujian tanpa SMS, daftarkan nomor uji dan kode OTP di pengaturan Supabase Auth terlebih dahulu. Setelah itu, aktifkan `SUPABASE_ENABLE_PHONE_OTP` hanya pada konfigurasi lokal. Jika menggunakan provider SMS sungguhan, periksa biaya provider sebelum mengaktifkannya.
 
 Setelah OTP dikonfirmasi oleh Supabase Auth, RPC memverifikasi nomor terkonfirmasi terhadap data pelanggan di database sebelum menyimpan tautan. Aplikasi tidak membaca profil pelanggan sebelum pengaitan berhasil.
+Setelah akun tertaut, nama pada beranda diambil dari kolom `customers.name`; nama akun Google hanya digunakan sebelum ID pelanggan tertaut.
 
 ### 4. Jalankan aplikasi
 

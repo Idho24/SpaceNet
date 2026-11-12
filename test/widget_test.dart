@@ -8,9 +8,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:spacenet/core/routing/app_router.dart';
 import 'package:spacenet/core/supabase/supabase_runtime_config.dart';
+import 'package:spacenet/data/models/customer_model.dart';
+import 'package:spacenet/data/repositories/auth_repository.dart';
+import 'package:spacenet/data/repositories/customer_repository.dart';
 import 'package:spacenet/data/repositories/otp_repository.dart';
 import 'package:spacenet/features/auth/auth_state.dart';
 import 'package:spacenet/features/auth/registration_controller.dart';
@@ -28,6 +32,24 @@ ProviderContainer _offlineContainer() => ProviderContainer(
 );
 
 void main() {
+  test('Supabase Google user name falls back to name metadata', () {
+    final user = User.fromJson({
+      'id': 'google-user-id',
+      'app_metadata': <String, dynamic>{},
+      'user_metadata': {'name': 'Rina Google'},
+      'aud': 'authenticated',
+      'created_at': '2026-01-01T00:00:00.000Z',
+    })!;
+
+    final session = AuthSessionUser.fromSupabaseUser(
+      user,
+      customerId: '0012995',
+    );
+
+    expect(session.displayName, 'Rina Google');
+    expect(session.isCustomerLinked, isTrue);
+  });
+
   testWidgets('SpaceNet app loads splash and login flow', (
     WidgetTester tester,
   ) async {
@@ -49,6 +71,61 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Selamat datang'), findsOneWidget);
+  });
+
+  testWidgets('login help opens guidance and an action button', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          supabaseRuntimeConfigProvider.overrideWithValue(
+            _offlineSupabaseConfig,
+          ),
+        ],
+        child: const SpaceNetApp(),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 2500));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Butuh bantuan?'));
+    await tester.tap(find.text('Butuh bantuan?'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('siapkan ID pelanggan dan nomor ponsel'),
+      findsOneWidget,
+    );
+    expect(find.text('Mulai login dengan Google'), findsOneWidget);
+    expect(find.text('Masuk mode demo lokal'), findsOneWidget);
+  });
+
+  testWidgets('new customer action authenticates before opening registration', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          supabaseRuntimeConfigProvider.overrideWithValue(
+            const SupabaseRuntimeConfig(
+              url: 'https://project.supabase.co',
+              publishableKey: 'public-key',
+              isTestingMode: true,
+            ),
+          ),
+        ],
+        child: const SpaceNetApp(),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 2500));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Pelanggan baru? Hubungkan akun'));
+    await tester.tap(find.text('Pelanggan baru? Hubungkan akun'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Verifikasi data pelanggan'), findsOneWidget);
+    expect(find.text('Kirim kode verifikasi'), findsOneWidget);
   });
 
   testWidgets('all five main destinations open without overflow', (
@@ -74,6 +151,57 @@ void main() {
       expect(find.text(heading), findsWidgets);
       expect(tester.takeException(), isNull);
     }
+  });
+
+  testWidgets('dashboard shows the linked customer database name', (
+    tester,
+  ) async {
+    final databaseCustomer = CustomerModel(
+      customerId: '0012995',
+      name: 'Nama dari Database',
+      phone: '+6281255671201',
+      email: 'customer@spacenet.id',
+      address: 'Jl. Cikutra No. 22, Bandung',
+      activePackage: 'Home Fiber 200 Mbps',
+      subscriptionStatus: 'active',
+      installationDate: DateTime(2025, 6, 15),
+      expiryDate: DateTime(2026, 11, 30),
+      createdAt: DateTime(2025, 6, 1),
+      updatedAt: DateTime(2026, 11, 1),
+    );
+    final container = ProviderContainer(
+      overrides: [
+        supabaseRuntimeConfigProvider.overrideWithValue(_offlineSupabaseConfig),
+        customerProfileProvider('0012995')
+            .overrideWith((ref) async => databaseCustomer),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await _signInAndLinkDemo(tester, container: container);
+
+    expect(find.text('Nama dari Database'), findsOneWidget);
+    expect(find.text('Nabila Sari'), findsNothing);
+    await tester.tap(find.text('Profil').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Nama dari Database'), findsOneWidget);
+    expect(find.text('Nabila Sari'), findsNothing);
+    expect(find.byTooltip('Edit profil'), findsNothing);
+  });
+
+  testWidgets('package change request is recorded in preview', (tester) async {
+    final container = await _signInAndLinkDemo(tester);
+    container.read(routerProvider).go('/subscription/upgrade');
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Ajukan perubahan paket'));
+    await tester.tap(find.text('Ajukan perubahan paket'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Kirim pengajuan'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pengajuan PKG-1'), findsOneWidget);
+    expect(find.text('Home Fiber 300 Mbps'), findsWidgets);
   });
 
   testWidgets('payment instructions stay pending until server confirmation', (
@@ -228,9 +356,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 2400));
       await tester.pumpAndSettle();
 
-      // Klik masuk mode demo lokal
-      expect(find.text('Masuk mode demo lokal'), findsOneWidget);
-      await tester.tap(find.text('Masuk mode demo lokal'));
+      // CTA pelanggan baru memulai mode demo pada konfigurasi testing.
+      await tester.tap(find.text('Pelanggan baru? Hubungkan akun'));
       await tester.pumpAndSettle();
 
       // Isi customer ID dan nomor ponsel
@@ -310,7 +437,8 @@ Future<ProviderContainer> _signInAndLinkDemo(
   );
   await tester.pump(const Duration(milliseconds: 2400));
   await tester.pumpAndSettle();
-  await tester.tap(find.text('Masuk mode demo lokal'));
+  await tester.ensureVisible(find.text('Pelanggan baru? Hubungkan akun'));
+  await tester.tap(find.text('Pelanggan baru? Hubungkan akun'));
   await tester.pumpAndSettle();
 
   await tester.enterText(find.byType(TextFormField).at(0), '0012995');

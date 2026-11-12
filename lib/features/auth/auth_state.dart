@@ -105,6 +105,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
     );
   }
 
+  Future<AuthSessionUser> updateDisplayName(String displayName) async {
+    final user = await _repository.updateDisplayName(displayName);
+    state = AuthState.authenticated(user);
+    return user;
+  }
+
   static String _userFacingError(Object error) {
     final message = switch (error) {
       UnsupportedError(:final message) => message,

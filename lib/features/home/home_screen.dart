@@ -49,6 +49,22 @@ class _HomeScreenState extends State<HomeScreen> {
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 220),
         switchInCurve: Curves.easeOut,
+        transitionBuilder: (child, animation) {
+          final curvedAnimation = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+          );
+          return FadeTransition(
+            opacity: curvedAnimation,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 0.025),
+                end: Offset.zero,
+              ).animate(curvedAnimation),
+              child: child,
+            ),
+          );
+        },
         child: KeyedSubtree(
           key: ValueKey(_selectedIndex),
           child: pages[_selectedIndex],
@@ -99,6 +115,17 @@ class DashboardTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final invoice = ref.watch(mockRepositoryProvider).currentInvoice!;
     final sessionUser = ref.watch(authNotifierProvider).user;
+    final customerId = sessionUser?.customerId;
+    final customerProfile = customerId == null
+        ? null
+        : ref.watch(customerProfileProvider(customerId));
+    final displayName = customerId == null
+        ? sessionUser?.displayName ?? 'Pelanggan'
+        : customerProfile!.when(
+            data: (customer) => customer?.name ?? 'Pelanggan',
+            loading: () => 'Memuat nama...',
+            error: (_, _) => 'Nama pelanggan tidak dapat dimuat',
+          );
     final greeting = switch (DateTime.now().hour) {
       < 12 => 'Selamat pagi,',
       < 15 => 'Selamat siang,',
@@ -120,7 +147,7 @@ class DashboardTab extends ConsumerWidget {
                   Text(greeting, style: const TextStyle(color: AppTheme.textSecondary)),
                   const SizedBox(height: 4),
                   Text(
-                    sessionUser?.displayName ?? 'Pelanggan',
+                    displayName,
                     style: Theme.of(context).textTheme.headlineMedium,
                   ),
                 ],
@@ -430,7 +457,7 @@ class SupportTab extends ConsumerWidget {
                 onTap: () => context.push('/tickets/${ticket.id}'),
                 child: Row(
                   children: [
-                    const CircleAvatar(
+                    CircleAvatar(
                       backgroundColor: Color(0xFFE7F5FB),
                       child: Icon(Icons.support_agent, color: AppTheme.primaryBlue),
                     ),
@@ -486,6 +513,13 @@ class ProfileTab extends ConsumerWidget {
         ? const AsyncValue<CustomerModel?>.data(null)
         : ref.watch(customerProfileProvider(customerId));
     final customer = customerProfile.valueOrNull;
+    final profileName = customerId == null
+        ? sessionUser?.displayName ?? 'Pengguna SpaceNet'
+        : customerProfile.when(
+            data: (customer) => customer?.name ?? 'Pelanggan',
+            loading: () => 'Memuat nama...',
+            error: (_, _) => 'Nama pelanggan tidak dapat dimuat',
+          );
 
     ref.listen(authNotifierProvider, (previous, next) {
       if (next.status == AuthStatus.error && next.errorMessage != null) {
@@ -507,12 +541,15 @@ class ProfileTab extends ConsumerWidget {
         SurfaceCard(
           child: Row(
             children: [
-              const CircleAvatar(
+              CircleAvatar(
                 radius: 30,
                 backgroundColor: Color(0xFFE7F5FB),
                 child: Text(
-                  'NS',
-                  style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.w700),
+                  _profileInitials(profileName),
+                  style: const TextStyle(
+                    color: AppTheme.primaryBlue,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
               const SizedBox(width: 14),
@@ -521,7 +558,7 @@ class ProfileTab extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      sessionUser?.displayName ?? 'Pengguna SpaceNet',
+                      profileName,
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
@@ -535,11 +572,16 @@ class ProfileTab extends ConsumerWidget {
                   ],
                 ),
               ),
-              IconButton(
-                tooltip: 'Edit profil',
-                onPressed: () => showAppMessage(context, 'Perubahan profil akan tersedia setelah akun terhubung.'),
-                icon: const Icon(Icons.edit_outlined),
-              ),
+              if (customerId == null)
+                IconButton(
+                  tooltip: 'Edit profil',
+                  onPressed: () => _editDisplayName(
+                    context,
+                    ref,
+                    sessionUser?.displayName,
+                  ),
+                  icon: const Icon(Icons.edit_outlined),
+                ),
             ],
           ),
         ),
@@ -606,6 +648,92 @@ class ProfileTab extends ConsumerWidget {
       ],
     );
   }
+}
+
+Future<void> _editDisplayName(
+  BuildContext context,
+  WidgetRef ref,
+  String? currentName,
+) async {
+  final updatedName = await showDialog<String>(
+    context: context,
+    builder: (_) => _EditDisplayNameDialog(currentName: currentName),
+  );
+
+  final name = updatedName?.trim();
+  if (name == null || !context.mounted) return;
+  if (name.isEmpty) {
+    showAppMessage(context, 'Nama tampilan tidak boleh kosong.');
+    return;
+  }
+
+  try {
+    await ref.read(authNotifierProvider.notifier).updateDisplayName(name);
+    if (context.mounted) showAppMessage(context, 'Nama profil berhasil diperbarui.');
+  } on Exception catch (error) {
+    if (context.mounted) {
+      showAppMessage(context, 'Nama profil gagal diperbarui. $error');
+    }
+  }
+}
+
+class _EditDisplayNameDialog extends StatefulWidget {
+  final String? currentName;
+
+  const _EditDisplayNameDialog({required this.currentName});
+
+  @override
+  State<_EditDisplayNameDialog> createState() => _EditDisplayNameDialogState();
+}
+
+class _EditDisplayNameDialogState extends State<_EditDisplayNameDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.currentName ?? '');
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Ubah nama profil'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        maxLength: 80,
+        textCapitalization: TextCapitalization.words,
+        decoration: const InputDecoration(labelText: 'Nama tampilan'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Batal'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _controller.text),
+          child: const Text('Simpan'),
+        ),
+      ],
+    );
+  }
+}
+
+String _profileInitials(String? displayName) {
+  final words = (displayName ?? '')
+      .trim()
+      .split(RegExp(r'\s+'))
+      .where((word) => word.isNotEmpty)
+      .take(2);
+  final initials = words.map((word) => word[0].toUpperCase()).join();
+  return initials.isEmpty ? 'PS' : initials;
 }
 
 class _ScrollablePage extends StatelessWidget {
