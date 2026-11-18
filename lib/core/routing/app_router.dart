@@ -1,3 +1,4 @@
+import 'payment_return.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -15,14 +16,18 @@ final routerProvider = Provider<GoRouter>((ref) {
     refreshListenable.refresh();
   });
 
+  String? pendingPaymentOrderId = kIsWeb ? paymentOrderFromUri(Uri.base) : null;
+  final initialPaymentOrderId = pendingPaymentOrderId;
   final router = GoRouter(
-    initialLocation: '/',
+    initialLocation: initialPaymentOrderId == null ? '/' : paymentResultLocation(initialPaymentOrderId),
+    overridePlatformDefaultLocation: initialPaymentOrderId != null,
     refreshListenable: refreshListenable,
     redirect: (context, state) {
       final authState = ref.read(authNotifierProvider);
       final location = state.matchedLocation;
       final isEntryRoute = location == '/' || location == '/login';
 
+      pendingPaymentOrderId ??= paymentOrderFromUri(state.uri);
       if (authState.status == AuthStatus.loading) {
         return location == '/' ? null : '/';
       }
@@ -35,6 +40,13 @@ final routerProvider = Provider<GoRouter>((ref) {
         return location == '/register' || location == '/verify'
             ? null
             : '/register';
+      }
+
+      final paymentOrderId = pendingPaymentOrderId;
+      if (paymentOrderId != null) {
+        pendingPaymentOrderId = null;
+        final target = paymentResultLocation(paymentOrderId);
+        if (state.uri.toString() != target) return target;
       }
 
       if (isEntryRoute || location == '/register' || location == '/verify') {
@@ -82,6 +94,15 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/payment/:id',
         builder: (context, state) =>
             PaymentScreen(invoiceId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: '/payment-result',
+        builder: (context, state) => PaymentResultScreen(
+          orderId:
+              state.uri.queryParameters['order_id'] ??
+              state.uri.queryParameters['orderId'] ??
+              '',
+        ),
       ),
       GoRoute(
         path: '/subscription/upgrade',

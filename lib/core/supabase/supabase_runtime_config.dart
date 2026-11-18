@@ -32,7 +32,7 @@ class SupabaseRuntimeConfig {
 
     final testingEnv = const bool.fromEnvironment(
       'SUPABASE_TESTING_MODE',
-      defaultValue: true,
+      defaultValue: false,
     );
 
     return SupabaseRuntimeConfig(

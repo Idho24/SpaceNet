@@ -7,7 +7,10 @@ import '../../core/widgets/app_components.dart';
 import '../../core/widgets/brand_logo.dart';
 import '../../data/mock/mock_repository.dart';
 import '../../data/models/customer_model.dart';
+import '../../data/models/invoice_model.dart';
+import '../../data/models/payment_transaction.dart';
 import '../../data/repositories/customer_repository.dart';
+import '../../data/repositories/invoice_repository.dart';
 import '../auth/auth_state.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -34,6 +37,12 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _selectedIndex = widget.initialTab;
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialTab != widget.initialTab) _selectedIndex = widget.initialTab;
   }
 
   @override
@@ -113,7 +122,11 @@ class DashboardTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final invoice = ref.watch(mockRepositoryProvider).currentInvoice!;
+    final invoiceState = ref.watch(invoicesProvider);
+    final invoices = invoiceState.valueOrNull ?? const <InvoiceModel>[];
+    final invoice = invoices
+        .where((invoice) => invoice.status == InvoiceStatus.unpaid)
+        .firstOrNull;
     final sessionUser = ref.watch(authNotifierProvider).user;
     final customerId = sessionUser?.customerId;
     final customerProfile = customerId == null
@@ -134,8 +147,18 @@ class DashboardTab extends ConsumerWidget {
     };
     return _ScrollablePage(
       onRefresh: () async {
-        await ref.read(mockRepositoryProvider).loadInvoices();
-        if (context.mounted) showAppMessage(context, 'Informasi berhasil diperbarui.');
+        ref.invalidate(invoicesProvider);
+        ref.invalidate(activeCustomerProvider);
+        try {
+          await ref.read(invoicesProvider.future);
+          if (context.mounted) {
+            showAppMessage(context, 'Informasi berhasil diperbarui.');
+          }
+        } catch (error) {
+          if (context.mounted) {
+            showAppMessage(context, 'Tagihan gagal dimuat: $error');
+          }
+        }
       },
       children: [
         Row(
@@ -144,7 +167,10 @@ class DashboardTab extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(greeting, style: const TextStyle(color: AppTheme.textSecondary)),
+                  Text(
+                    greeting,
+                    style: const TextStyle(color: AppTheme.textSecondary),
+                  ),
                   const SizedBox(height: 4),
                   Text(
                     displayName,
@@ -161,11 +187,14 @@ class DashboardTab extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 18),
-        _SubscriptionCard(
-          onTap: () => context.go('/subscription'),
-        ),
+        _SubscriptionCard(onTap: () => context.go('/subscription')),
         const SizedBox(height: 18),
-        _BillingSummary(invoice: invoice),
+        _BillingSummary(
+          invoice: invoice,
+          isLoading: invoiceState.isLoading,
+          hasError: invoiceState.hasError,
+          hasNoInvoices: invoiceState.hasValue && invoices.isEmpty,
+        ),
         const SizedBox(height: 22),
         const SectionHeading(title: 'Akses cepat'),
         const SizedBox(height: 10),
@@ -176,12 +205,16 @@ class DashboardTab extends ConsumerWidget {
             _QuickAction(
               icon: Icons.payment_rounded,
               title: 'Bayar WiFi',
-              onTap: () => context.push('/payment/${invoice.id}'),
+              onTap: invoice == null
+                  ? () => context.go('/billing')
+                  : () => context.push('/payment/${invoice.id}'),
             ),
             _QuickAction(
               icon: Icons.autorenew_rounded,
               title: 'Perpanjang',
-              onTap: () => context.push('/payment/${invoice.id}'),
+              onTap: invoice == null
+                  ? () => context.go('/billing')
+                  : () => context.push('/payment/${invoice.id}'),
             ),
             _QuickAction(
               icon: Icons.report_problem_outlined,
@@ -245,9 +278,12 @@ class _BillingTabState extends ConsumerState<BillingTab> {
       _error = null;
     });
     try {
-      await ref.read(mockRepositoryProvider).loadInvoices();
-    } catch (_) {
-      setState(() => _error = 'Data tagihan gagal dimuat.');
+      ref.invalidate(invoicesProvider);
+      await ref.read(invoicesProvider.future);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = 'Data tagihan gagal dimuat: $error');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -255,12 +291,18 @@ class _BillingTabState extends ConsumerState<BillingTab> {
 
   @override
   Widget build(BuildContext context) {
-    final invoices = ref.watch(mockRepositoryProvider).invoices.where((invoice) {
+    final invoiceState = ref.watch(invoicesProvider);
+    final allInvoices = invoiceState.valueOrNull ?? const <InvoiceModel>[];
+    final invoices = allInvoices.where((invoice) {
       return _filter == 'Semua' ||
-          (_filter == 'Belum dibayar' && invoice.status == InvoiceStatus.unpaid) ||
+          (_filter == 'Belum dibayar' &&
+              invoice.status == InvoiceStatus.unpaid) ||
           (_filter == 'Lunas' && invoice.status == InvoiceStatus.paid) ||
           (_filter == 'Kedaluwarsa' && invoice.status == InvoiceStatus.expired);
     }).toList();
+    final currentInvoice = allInvoices
+        .where((invoice) => invoice.status == InvoiceStatus.unpaid)
+        .firstOrNull;
     return _ScrollablePage(
       onRefresh: _refresh,
       children: [
@@ -274,11 +316,16 @@ class _BillingTabState extends ConsumerState<BillingTab> {
           ),
         ),
         const SizedBox(height: 18),
-        if (_loading) const LinearProgressIndicator(),
-        if (_error != null)
+        if (_loading || invoiceState.isLoading) const LinearProgressIndicator(),
+        if (invoiceState.isLoading && !invoiceState.hasValue)
+          const LoadingState()
+        else if (_error != null || invoiceState.hasError)
           ErrorState(onRetry: _refresh)
         else ...[
-          _OutstandingBalance(invoice: ref.watch(mockRepositoryProvider).currentInvoice),
+          _OutstandingBalance(
+            invoice: currentInvoice,
+            hasNoInvoices: invoiceState.hasValue && allInvoices.isEmpty,
+          ),
           const SizedBox(height: 18),
           const SectionHeading(title: 'Daftar invoice'),
           const SizedBox(height: 8),
@@ -329,35 +376,48 @@ class SubscriptionTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final invoice = ref.watch(mockRepositoryProvider).currentInvoice!;
+    final invoices = ref.watch(invoicesProvider).valueOrNull ?? const <InvoiceModel>[];
+    final invoice = invoices.where((item) => item.status == InvoiceStatus.unpaid).firstOrNull;
+    final customerState = ref.watch(activeCustomerProvider);
     return _ScrollablePage(
+      onRefresh: () async {
+        ref.invalidate(invoicesProvider);
+        await ref.refresh(activeCustomerProvider.future);
+      },
       children: [
-        const PageHeading(
-          title: 'Langganan',
-          subtitle: 'Detail paket dan masa aktif',
-        ),
+        const PageHeading(title: 'Langganan', subtitle: 'Detail paket dan masa aktif'),
         const SizedBox(height: 18),
         const _SubscriptionCard(onTap: null, expanded: true),
         const SizedBox(height: 18),
         const SectionHeading(title: 'Paket aktif'),
-        SurfaceCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const _InfoRow(label: 'Nama paket', value: 'Home Fiber 200 Mbps'),
-              const _InfoRow(label: 'Kecepatan', value: '200 Mbps'),
-              const _InfoRow(label: 'Biaya bulanan', value: 'Rp 249.000'),
-              const _InfoRow(label: 'Mulai berlangganan', value: '15 Jun 2025'),
-              const _InfoRow(label: 'Berakhir', value: '30 Nov 2026'),
-              const _InfoRow(label: 'Status', value: 'Aktif'),
-            ],
-          ),
+        customerState.when(
+          loading: () => const LoadingState(),
+          error: (_, _) => ErrorState(onRetry: () => ref.invalidate(activeCustomerProvider)),
+          data: (customer) => customer == null
+            ? const EmptyState(title: 'Paket belum tersedia', message: 'Hubungkan akun dengan ID pelanggan Anda.')
+            : SurfaceCard(child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _InfoRow(label: 'Nama paket', value: customer.activePackage),
+                  if (customer.monthlyFee != null)
+                    _InfoRow(label: 'Biaya bulanan', value: formatRupiah(customer.monthlyFee!)),
+                  _InfoRow(label: 'Mulai berlangganan', value: formatPaymentDate(customer.installationDate)),
+                  _InfoRow(label: 'Berakhir', value: formatPaymentDate(customer.expiryDate)),
+                  _InfoRow(label: 'Status', value: _subscriptionLabel(customer)),
+                ],
+              )),
         ),
         const SizedBox(height: 18),
         ElevatedButton.icon(
-          onPressed: () => context.push('/payment/${invoice.id}'),
+          onPressed: invoice == null ? null : () => context.push('/payment/${invoice.id}'),
           icon: const Icon(Icons.autorenew),
           label: const Text('Perpanjang masa aktif'),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: () => context.push('/transactions'),
+          icon: const Icon(Icons.receipt_long_outlined),
+          label: const Text('Riwayat transaksi'),
         ),
         const SizedBox(height: 10),
         OutlinedButton.icon(
@@ -368,12 +428,18 @@ class SubscriptionTab extends ConsumerWidget {
         const SizedBox(height: 14),
         const _InlineNotice(
           icon: Icons.info_outline,
-          text: 'Perpanjangan dan perubahan paket ditampilkan sebagai pratinjau. '
-              'Konfirmasi tagihan akan tersedia setelah backend disiapkan.',
+          text: 'Masa aktif diperbarui otomatis setelah pembayaran dikonfirmasi. '
+            'Satu tagihan memperpanjang satu bulan dari masa aktif terakhir, '
+            'atau tanggal pembayaran jika paket sudah berakhir.',
         ),
       ],
     );
   }
+}
+
+String _subscriptionLabel(CustomerModel customer) {
+  if (!customer.expiryDate.isAfter(DateTime.now())) return 'Berakhir';
+  return customer.subscriptionStatus == 'active' ? 'Aktif' : 'Tidak aktif';
 }
 
 class SupportTab extends ConsumerWidget {
@@ -459,22 +525,40 @@ class SupportTab extends ConsumerWidget {
                   children: [
                     CircleAvatar(
                       backgroundColor: Color(0xFFE7F5FB),
-                      child: Icon(Icons.support_agent, color: AppTheme.primaryBlue),
+                      child: Icon(
+                        Icons.support_agent,
+                        color: AppTheme.primaryBlue,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(ticket.category, style: const TextStyle(fontWeight: FontWeight.w700)),
+                          Text(
+                            ticket.category,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
                           const SizedBox(height: 4),
-                          Text('${ticket.id} • ${ticket.date}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                          Text(
+                            '${ticket.id} • ${ticket.date}',
+                            style: const TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 12,
+                            ),
+                          ),
                           const SizedBox(height: 8),
-                          StatusPill(label: ticket.status, color: AppTheme.warning),
+                          StatusPill(
+                            label: ticket.status,
+                            color: AppTheme.warning,
+                          ),
                         ],
                       ),
                     ),
-                    const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
+                    const Icon(
+                      Icons.chevron_right,
+                      color: AppTheme.textSecondary,
+                    ),
                   ],
                 ),
               ),
@@ -532,7 +616,10 @@ class ProfileTab extends ConsumerWidget {
         Row(
           children: [
             Expanded(
-              child: Text('Profil', style: Theme.of(context).textTheme.headlineMedium),
+              child: Text(
+                'Profil',
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
             ),
             const BrandLogo(width: 110),
           ],
@@ -575,11 +662,8 @@ class ProfileTab extends ConsumerWidget {
               if (customerId == null)
                 IconButton(
                   tooltip: 'Edit profil',
-                  onPressed: () => _editDisplayName(
-                    context,
-                    ref,
-                    sessionUser?.displayName,
-                  ),
+                  onPressed: () =>
+                      _editDisplayName(context, ref, sessionUser?.displayName),
                   icon: const Icon(Icons.edit_outlined),
                 ),
             ],
@@ -608,7 +692,8 @@ class ProfileTab extends ConsumerWidget {
         if (customer == null && !customerProfile.isLoading)
           const EmptyState(
             title: 'Profil pelanggan belum tersedia',
-            message: 'Data pelanggan akan tampil setelah verifikasi akun selesai.',
+            message:
+                'Data pelanggan akan tampil setelah verifikasi akun selesai.',
             icon: Icons.person_outline,
           ),
         const SizedBox(height: 16),
@@ -669,7 +754,8 @@ Future<void> _editDisplayName(
 
   try {
     await ref.read(authNotifierProvider.notifier).updateDisplayName(name);
-    if (context.mounted) showAppMessage(context, 'Nama profil berhasil diperbarui.');
+    if (context.mounted)
+      showAppMessage(context, 'Nama profil berhasil diperbarui.');
   } on Exception catch (error) {
     if (context.mounted) {
       showAppMessage(context, 'Nama profil gagal diperbarui. $error');
@@ -748,10 +834,7 @@ class _ScrollablePage extends StatelessWidget {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
       children: [
-        for (final child in children) ...[
-          child,
-          const SizedBox(height: 12),
-        ],
+        for (final child in children) ...[child, const SizedBox(height: 12)],
       ],
     );
     return SafeArea(
@@ -762,133 +845,83 @@ class _ScrollablePage extends StatelessWidget {
   }
 }
 
-class _SubscriptionCard extends StatelessWidget {
+class _SubscriptionCard extends ConsumerWidget {
   final VoidCallback? onTap;
   final bool expanded;
-
   const _SubscriptionCard({required this.onTap, this.expanded = false});
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(22),
-        gradient: const LinearGradient(
-          colors: [AppTheme.primaryBlue, AppTheme.secondaryBlue],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(22),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'LANGGANAN AKTIF',
-                      style: TextStyle(color: AppTheme.white, fontWeight: FontWeight.w600, fontSize: 12, letterSpacing: 0.6),
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: AppTheme.white.withValues(alpha: 0.18),
-                      borderRadius: BorderRadius.circular(99),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.circle, size: 8, color: Color(0xFF8BF0BD)),
-                        SizedBox(width: 6),
-                        Text(
-                          'Online',
-                          style: TextStyle(
-                            color: AppTheme.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Home Fiber 200 Mbps',
-                style: TextStyle(color: AppTheme.white, fontSize: 23, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 6),
-              const Text('ID 0012995 • Bandung', style: TextStyle(color: AppTheme.white)),
-              const SizedBox(height: 18),
-              Row(
-                children: const [
-                  Expanded(child: _SpeedSummary(label: 'Unduh', value: '190 Mbps')),
-                  SizedBox(width: 12),
-                  Expanded(child: _SpeedSummary(label: 'Unggah', value: '98 Mbps')),
-                ],
-              ),
-              if (expanded) ...[
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(activeCustomerProvider);
+    return state.when(
+      loading: () => const LoadingState(),
+      error: (_, _) => ErrorState(onRetry: () => ref.invalidate(activeCustomerProvider)),
+      data: (customer) {
+        if (customer == null) {
+          return const EmptyState(title: 'Paket belum tersedia',
+            message: 'Hubungkan akun dengan ID pelanggan Anda.');
+        }
+        return Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(22),
+            gradient: const LinearGradient(
+              colors: [AppTheme.primaryBlue, AppTheme.secondaryBlue],
+              begin: Alignment.topLeft, end: Alignment.bottomRight,
+            ),
+          ),
+          child: InkWell(
+            onTap: onTap, borderRadius: BorderRadius.circular(22),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  const Expanded(child: Text('PAKET INTERNET',
+                    style: TextStyle(color: AppTheme.white, fontWeight: FontWeight.w600, fontSize: 12))),
+                  Text(_subscriptionLabel(customer), style: const TextStyle(
+                    color: AppTheme.white, fontWeight: FontWeight.w700)),
+                ]),
+                const SizedBox(height: 12),
+                Text(customer.activePackage, style: const TextStyle(
+                  color: AppTheme.white, fontSize: 23, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 6),
+                Text('ID ${customer.customerId}', style: const TextStyle(color: AppTheme.white)),
                 const SizedBox(height: 18),
-                const Divider(color: Color(0x66FFFFFF)),
-                const SizedBox(height: 8),
-                const Text('Masa aktif hingga 30 November 2026', style: TextStyle(color: AppTheme.white)),
-              ],
-              if (onTap != null) ...[
-                const SizedBox(height: 14),
-                const Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
+                Text('Masa aktif hingga ${formatPaymentDate(customer.expiryDate)}',
+                  style: const TextStyle(color: AppTheme.white)),
+                if (expanded && customer.monthlyFee != null) ...[
+                  const SizedBox(height: 8),
+                  Text('${formatRupiah(customer.monthlyFee!)} / bulan',
+                    style: const TextStyle(color: AppTheme.white)),
+                ],
+                if (onTap != null) ...[
+                  const SizedBox(height: 14),
+                  const Row(mainAxisAlignment: MainAxisAlignment.end, children: [
                     Text('Detail paket', style: TextStyle(color: AppTheme.white)),
                     SizedBox(width: 6),
                     Icon(Icons.arrow_forward, color: AppTheme.white, size: 16),
-                  ],
-                ),
-              ],
-            ],
+                  ]),
+                ],
+              ]),
+            ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SpeedSummary extends StatelessWidget {
-  final String label;
-  final String value;
-
-  const _SpeedSummary({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppTheme.white.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: const TextStyle(color: AppTheme.white, fontSize: 12)),
-          const SizedBox(height: 5),
-          Text(value, style: const TextStyle(color: AppTheme.white, fontSize: 17, fontWeight: FontWeight.w700)),
-        ],
-      ),
+        );
+      },
     );
   }
 }
 
 class _BillingSummary extends StatelessWidget {
-  final MockInvoice invoice;
+  final InvoiceModel? invoice;
+  final bool isLoading;
+  final bool hasError;
+  final bool hasNoInvoices;
 
-  const _BillingSummary({required this.invoice});
+  const _BillingSummary({
+    required this.invoice,
+    required this.isLoading,
+    required this.hasError,
+    required this.hasNoInvoices,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -896,27 +929,55 @@ class _BillingSummary extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Expanded(child: Text('Tagihan bulan ini', style: TextStyle(color: AppTheme.textSecondary))),
-              StatusPill(label: 'Belum dibayar', color: AppTheme.warning),
+              const Expanded(
+                child: Text(
+                  'Tagihan bulan ini',
+                  style: TextStyle(color: AppTheme.textSecondary),
+                ),
+              ),
+              if (invoice != null)
+                StatusPill(label: 'Belum dibayar', color: AppTheme.warning),
             ],
           ),
           const SizedBox(height: 10),
-          Text(
-            formatRupiah(invoice.amount),
-            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: AppTheme.darkNavy),
-          ),
-          const SizedBox(height: 5),
-          Text('Jatuh tempo 14 November 2026 • ${invoice.id}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () => context.push('/payment/${invoice.id}'),
-              child: const Text('Bayar sekarang'),
+          if (invoice != null) ...[
+            Text(
+              formatRupiah(invoice!.amount),
+              style: const TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.w800,
+                color: AppTheme.darkNavy,
+              ),
             ),
-          ),
+            const SizedBox(height: 5),
+            Text(
+              '${invoice!.period} • ${invoice!.id}',
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => context.push('/payment/${invoice!.id}'),
+                child: const Text('Bayar sekarang'),
+              ),
+            ),
+          ] else
+            Text(
+              isLoading
+                  ? 'Memuat tagihan...'
+                  : hasError
+                  ? 'Data tagihan gagal dimuat.'
+                  : hasNoInvoices
+                  ? 'Belum ada tagihan untuk akun ini.'
+                  : 'Tidak ada tagihan yang perlu dibayar.',
+              style: const TextStyle(color: AppTheme.textSecondary),
+            ),
         ],
       ),
     );
@@ -924,19 +985,29 @@ class _BillingSummary extends StatelessWidget {
 }
 
 class _OutstandingBalance extends StatelessWidget {
-  final MockInvoice? invoice;
+  final InvoiceModel? invoice;
+  final bool hasNoInvoices;
 
-  const _OutstandingBalance({required this.invoice});
+  const _OutstandingBalance({
+    required this.invoice,
+    required this.hasNoInvoices,
+  });
 
   @override
   Widget build(BuildContext context) {
     if (invoice == null) {
-      return const SurfaceCard(
+      return SurfaceCard(
         child: Row(
           children: [
-            Icon(Icons.check_circle, color: AppTheme.success),
-            SizedBox(width: 12),
-            Expanded(child: Text('Semua tagihan Anda sudah lunas.')),
+            const Icon(Icons.check_circle, color: AppTheme.success),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                hasNoInvoices
+                    ? 'Belum ada tagihan untuk akun ini.'
+                    : 'Semua tagihan Anda sudah lunas.',
+              ),
+            ),
           ],
         ),
       );
@@ -945,16 +1016,31 @@ class _OutstandingBalance extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(20),
-        gradient: const LinearGradient(colors: [AppTheme.darkNavy, AppTheme.secondaryBlue]),
+        gradient: const LinearGradient(
+          colors: [AppTheme.darkNavy, AppTheme.secondaryBlue],
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Total yang perlu dibayar', style: TextStyle(color: Color(0xFFD8EAF4))),
+          const Text(
+            'Total yang perlu dibayar',
+            style: TextStyle(color: Color(0xFFD8EAF4)),
+          ),
           const SizedBox(height: 6),
-          Text(formatRupiah(invoice!.amount), style: const TextStyle(color: AppTheme.white, fontSize: 28, fontWeight: FontWeight.w800)),
+          Text(
+            formatRupiah(invoice!.amount),
+            style: const TextStyle(
+              color: AppTheme.white,
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
           const SizedBox(height: 6),
-          Text('Jatuh tempo 14 November 2026', style: const TextStyle(color: AppTheme.white)),
+          Text(
+            'Jatuh tempo ${invoice!.dueDate.day}/${invoice!.dueDate.month}/${invoice!.dueDate.year}',
+            style: const TextStyle(color: AppTheme.white),
+          ),
           const SizedBox(height: 14),
           OutlinedButton(
             onPressed: () => context.push('/payment/${invoice!.id}'),
@@ -971,7 +1057,7 @@ class _OutstandingBalance extends StatelessWidget {
 }
 
 class _InvoiceTile extends StatelessWidget {
-  final MockInvoice invoice;
+  final InvoiceModel invoice;
 
   const _InvoiceTile({required this.invoice});
 
@@ -989,19 +1075,37 @@ class _InvoiceTile extends StatelessWidget {
           Container(
             width: 44,
             height: 44,
-            decoration: BoxDecoration(color: AppTheme.primaryBlue.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(13)),
-            child: const Icon(Icons.receipt_long_outlined, color: AppTheme.primaryBlue),
+            decoration: BoxDecoration(
+              color: AppTheme.primaryBlue.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: const Icon(
+              Icons.receipt_long_outlined,
+              color: AppTheme.primaryBlue,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(invoice.period, style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(
+                  invoice.period,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
                 const SizedBox(height: 4),
-                Text(invoice.id, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                Text(
+                  invoice.id,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
                 const SizedBox(height: 6),
-                Text(formatRupiah(invoice.amount), style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(
+                  formatRupiah(invoice.amount),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
               ],
             ),
           ),
@@ -1024,7 +1128,11 @@ class _QuickAction extends StatelessWidget {
   final String title;
   final VoidCallback onTap;
 
-  const _QuickAction({required this.icon, required this.title, required this.onTap});
+  const _QuickAction({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1040,7 +1148,10 @@ class _QuickAction extends StatelessWidget {
             Expanded(
               child: Text(
                 title,
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
               ),
             ),
           ],
@@ -1062,15 +1173,24 @@ class _AnnouncementCard extends StatelessWidget {
           Container(
             height: 42,
             width: 42,
-            decoration: BoxDecoration(color: AppTheme.primaryBlue.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12)),
-            child: const Icon(Icons.network_check_rounded, color: AppTheme.primaryBlue),
+            decoration: BoxDecoration(
+              color: AppTheme.primaryBlue.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.network_check_rounded,
+              color: AppTheme.primaryBlue,
+            ),
           ),
           const SizedBox(width: 12),
           const Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Pemeliharaan jaringan', style: TextStyle(fontWeight: FontWeight.w700)),
+                Text(
+                  'Pemeliharaan jaringan',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
                 SizedBox(height: 5),
                 Text(
                   'Peningkatan jaringan area Bandung pada 8 November, pukul 01.00–03.00 WIB.',
@@ -1098,10 +1218,19 @@ class _InfoRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: Text(label, style: const TextStyle(color: AppTheme.textSecondary))),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(color: AppTheme.textSecondary),
+            ),
+          ),
           const SizedBox(width: 12),
           Flexible(
-            child: Text(value, textAlign: TextAlign.end, style: const TextStyle(fontWeight: FontWeight.w600)),
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
           ),
         ],
       ),
@@ -1119,13 +1248,21 @@ class _InlineNotice extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: AppTheme.primaryBlue.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(14)),
+      decoration: BoxDecoration(
+        color: AppTheme.primaryBlue.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(14),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(icon, size: 20, color: AppTheme.secondaryBlue),
           const SizedBox(width: 10),
-          Expanded(child: Text(text, style: const TextStyle(height: 1.45, fontSize: 13))),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(height: 1.45, fontSize: 13),
+            ),
+          ),
         ],
       ),
     );
@@ -1137,7 +1274,11 @@ class _HelpLink extends StatelessWidget {
   final String title;
   final VoidCallback onTap;
 
-  const _HelpLink({required this.icon, required this.title, required this.onTap});
+  const _HelpLink({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1149,7 +1290,12 @@ class _HelpLink extends StatelessWidget {
           children: [
             Icon(icon, color: AppTheme.primaryBlue),
             const SizedBox(width: 12),
-            Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.w600))),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
             const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
           ],
         ),
@@ -1163,7 +1309,11 @@ class _MenuRow extends StatelessWidget {
   final String title;
   final VoidCallback onTap;
 
-  const _MenuRow({required this.icon, required this.title, required this.onTap});
+  const _MenuRow({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {

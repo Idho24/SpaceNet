@@ -270,7 +270,7 @@ class TestingOtpService implements OtpRepository {
                 e.message.contains('does not exist'))) {
           throw const FormatException(
             'Validasi pelanggan mode pengujian belum tersedia di Supabase. '
-            'Terapkan migrasi 20261111000000_testing_link_customer.sql '
+            'Terapkan supabase/testing/20261111000000_testing_link_customer.sql '
             'pada project pengujian.',
           );
         }

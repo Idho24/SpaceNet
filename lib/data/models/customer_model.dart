@@ -10,6 +10,7 @@ class CustomerModel {
   final DateTime expiryDate;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final int? monthlyFee;
 
   const CustomerModel({
     required this.customerId,
@@ -23,6 +24,7 @@ class CustomerModel {
     required this.expiryDate,
     required this.createdAt,
     required this.updatedAt,
+    this.monthlyFee,
   });
 
   factory CustomerModel.fromFirestore(
@@ -48,6 +50,7 @@ class CustomerModel {
       expiryDate: _requiredDate(data, 'expiry_date'),
       createdAt: _requiredDate(data, 'created_at'),
       updatedAt: _requiredDate(data, 'updated_at'),
+      monthlyFee: (data['monthly_fee'] as num?)?.toInt(),
     );
   }
 

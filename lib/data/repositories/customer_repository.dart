@@ -1,3 +1,4 @@
+import '../../features/auth/auth_state.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -174,8 +175,6 @@ final customerRepositoryProvider = Provider<CustomerRepository>((ref) {
 class TestingSupabaseCustomerRepository implements CustomerRepository {
   final SupabaseClient? _client;
   final Map<String, String> _localLinkedCustomers = {};
-  // Cache customer data yang berhasil diambil dari Supabase
-  final Map<String, CustomerModel> _customerCache = {};
 
   TestingSupabaseCustomerRepository({SupabaseClient? client})
     : _client = client ?? _safeSupabaseClient();
@@ -210,73 +209,15 @@ class TestingSupabaseCustomerRepository implements CustomerRepository {
 
   @override
   Future<CustomerModel?> getCustomer(String customerId) async {
-    // Cek cache terlebih dahulu
-    if (_customerCache.containsKey(customerId)) {
-      return _customerCache[customerId];
-    }
-
-    final c = _client;
-    if (c != null) {
-      try {
-        // Gunakan RPC yang bypass RLS untuk mode pengujian
-        final response = await c.rpc('get_customer_for_testing', params: {
-          'p_customer_id': customerId,
-        });
-
-        if (response != null) {
-          final customer = CustomerModel.fromMap(Map<String, dynamic>.from(
-            response is Map ? response : {},
-          ));
-          _customerCache[customerId] = customer;
-          return customer;
-        }
-      } on PostgrestException catch (e) {
-        // Jika RPC belum ada, coba query langsung (mungkin gagal karena RLS)
-        if (e.message.contains('function') &&
-            e.message.contains('does not exist')) {
-          try {
-            final directResponse = await c
-                .from('customers')
-                .select()
-                .eq('customer_id', customerId)
-                .maybeSingle();
-
-            if (directResponse != null) {
-              final customer = CustomerModel.fromMap(
-                Map<String, dynamic>.from(directResponse),
-              );
-              _customerCache[customerId] = customer;
-              return customer;
-            }
-          } catch (_) {
-            // RLS blocked or other error — fallback to mock
-          }
-        }
-        // Other PostgrestException — fallback to mock
-      } catch (_) {
-        // Fallback ke mock jika query Supabase gagal
-      }
-    }
-
-    // Jika di database Supabase tidak ditemukan atau error, gunakan mock customer
-    if (customerId == '0012995') {
-      final mock = CustomerModel(
-        customerId: '0012995',
-        name: 'Nabila Sari',
-        phone: '+628****1201',
-        email: 'customer@spacenet.id',
-        address: 'Jl. Cikutra No. 22, Bandung',
-        activePackage: 'Home Fiber 200 Mbps',
-        subscriptionStatus: 'active',
-        installationDate: DateTime(2025, 6, 15),
-        expiryDate: DateTime(2026, 11, 30),
-        createdAt: DateTime(2025, 6, 1),
-        updatedAt: DateTime(2026, 11, 1),
-      );
-      _customerCache[customerId] = mock;
-      return mock;
-    }
-    return null;
+    // Read fresh data so a verified renewal is immediately visible.
+    final linked = await SupabaseCustomerRepository(client: _client).getCustomer(customerId);
+    if (linked != null || _client == null) return linked;
+    final response = await _client.rpc('get_customer_for_testing', params: {
+      'p_customer_id': customerId,
+    });
+    return response is Map
+        ? CustomerModel.fromMap(Map<String, dynamic>.from(response))
+        : null;
   }
 
   @override
@@ -326,5 +267,12 @@ final customerProfileProvider = FutureProvider.family<CustomerModel?, String>((
   ref,
   customerId,
 ) {
+  return ref.watch(customerRepositoryProvider).getCustomer(customerId);
+});
+
+final activeCustomerProvider = FutureProvider<CustomerModel?>((ref) {
+  final user = ref.watch(authNotifierProvider).user;
+  final customerId = user?.customerId;
+  if (customerId == null) return null;
   return ref.watch(customerRepositoryProvider).getCustomer(customerId);
 });

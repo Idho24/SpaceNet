@@ -1,13 +1,21 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_components.dart';
 import '../../core/widgets/brand_logo.dart';
 import '../../data/mock/mock_repository.dart';
+import '../../data/models/invoice_model.dart';
+import '../../data/repositories/payment_history_repository.dart';
+import '../../data/repositories/customer_repository.dart';
+import '../../data/repositories/invoice_repository.dart';
+import '../../data/repositories/midtrans_payment_repository.dart';
 import '../../data/repositories/push_notification_repository.dart';
 
 Future<void> _copyToClipboard(
@@ -20,7 +28,10 @@ Future<void> _copyToClipboard(
     if (context.mounted) showAppMessage(context, '$itemName disalin.');
   } on PlatformException catch (error) {
     if (context.mounted) {
-      showAppMessage(context, '$itemName gagal disalin. ${error.message ?? ''}');
+      showAppMessage(
+        context,
+        '$itemName gagal disalin. ${error.message ?? ''}',
+      );
     }
   } on MissingPluginException {
     if (context.mounted) {
@@ -36,75 +47,79 @@ class InvoiceDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final invoice = ref.watch(mockRepositoryProvider).invoiceById(invoiceId);
+    final invoiceState = ref.watch(invoicesProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Detail invoice')),
-      body: invoice == null
-          ? const EmptyState(
+      body: invoiceState.when(
+        loading: () => const LoadingState(),
+        error: (_, _) =>
+            ErrorState(onRetry: () => ref.invalidate(invoicesProvider)),
+        data: (invoices) {
+          final invoice = invoices
+              .where((invoice) => invoice.id == invoiceId)
+              .firstOrNull;
+          if (invoice == null) {
+            return const EmptyState(
               title: 'Invoice tidak ditemukan',
-              message: 'Data invoice ini tidak tersedia pada pratinjau.',
-            )
-          : ListView(
-              padding: const EdgeInsets.all(20),
-              children: [
-                _InvoiceStatusCard(invoice: invoice),
-                const SizedBox(height: 18),
-                const SectionHeading(title: 'Rincian tagihan'),
-                SurfaceCard(
-                  child: Column(
-                    children: [
-                      _DetailRow(label: 'Nomor invoice', value: invoice.id),
-                      _DetailRow(label: 'Periode', value: invoice.period),
-                      const _DetailRow(
-                        label: 'Paket internet',
-                        value: 'Home Fiber 200 Mbps',
-                      ),
-                      const _DetailRow(
-                        label: 'Biaya langganan',
-                        value: 'Rp 249.000',
-                      ),
-                      const _DetailRow(label: 'Pajak', value: 'Termasuk'),
-                      _DetailRow(
-                        label: 'Jatuh tempo',
-                        value: '${invoice.dueDate.day} November 2026',
-                      ),
-                      const Divider(height: 24),
-                      _DetailRow(
-                        label: 'Total pembayaran',
-                        value: formatRupiah(invoice.amount),
-                        emphasized: true,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-                if (invoice.status == InvoiceStatus.unpaid)
-                  ElevatedButton.icon(
-                    onPressed: () => context.push('/payment/${invoice.id}'),
-                    icon: const Icon(Icons.lock_outline),
-                    label: const Text('Pilih metode pembayaran'),
-                  )
-                else
-                  OutlinedButton.icon(
-                    onPressed: () => _copyToClipboard(
-                      context,
-                      'Invoice: ${invoice.id}\n'
-                      'Periode: ${invoice.period}\n'
-                      'Total: ${formatRupiah(invoice.amount)}\n'
-                      'Status: Lunas',
-                      'Rincian invoice',
+              message:
+                  'Tagihan ini tidak tersedia untuk akun yang sedang masuk.',
+            );
+          }
+          return ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              _InvoiceStatusCard(invoice: invoice),
+              const SizedBox(height: 18),
+              const SectionHeading(title: 'Rincian tagihan'),
+              SurfaceCard(
+                child: Column(
+                  children: [
+                    _DetailRow(label: 'Nomor invoice', value: invoice.id),
+                    _DetailRow(label: 'Periode', value: invoice.period),
+                    _DetailRow(
+                      label: 'Jatuh tempo',
+                      value:
+                          '${invoice.dueDate.day}/${invoice.dueDate.month}/${invoice.dueDate.year}',
                     ),
-                    icon: const Icon(Icons.copy_outlined),
-                    label: const Text('Salin rincian invoice'),
+                    const Divider(height: 24),
+                    _DetailRow(
+                      label: 'Total tagihan',
+                      value: formatRupiah(invoice.amount),
+                      emphasized: true,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              if (invoice.status == InvoiceStatus.unpaid)
+                ElevatedButton.icon(
+                  onPressed: () => context.push('/payment/${invoice.id}'),
+                  icon: const Icon(Icons.lock_outline),
+                  label: const Text('Pilih metode pembayaran'),
+                )
+              else
+                OutlinedButton.icon(
+                  onPressed: () => _copyToClipboard(
+                    context,
+                    'Invoice: ${invoice.id}\n'
+                        'Periode: ${invoice.period}\n'
+                        'Total: ${formatRupiah(invoice.amount)}\n'
+                        'Status: Lunas',
+                    'Rincian invoice',
                   ),
-              ],
-            ),
+                  icon: const Icon(Icons.copy_outlined),
+                  label: const Text('Salin rincian invoice'),
+                ),
+            ],
+          );
+        },
+      ),
     );
   }
 }
 
 class _InvoiceStatusCard extends StatelessWidget {
-  final MockInvoice invoice;
+  final InvoiceModel invoice;
 
   const _InvoiceStatusCard({required this.invoice});
 
@@ -171,136 +186,239 @@ class PaymentScreen extends ConsumerStatefulWidget {
   ConsumerState<PaymentScreen> createState() => _PaymentScreenState();
 }
 
-class _PaymentScreenState extends ConsumerState<PaymentScreen> {
-  String _method = 'QRIS';
-  bool _instructionsVisible = false;
+class _PaymentScreenState extends ConsumerState<PaymentScreen>
+    with WidgetsBindingObserver {
   bool _loading = false;
+  Timer? _statusTimer;
+  MidtransPayment? _payment;
+  String? _errorMessage;
 
-  Future<void> _createPayment() async {
-    setState(() => _loading = true);
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
-    setState(() {
-      _loading = false;
-      _instructionsVisible = true;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _statusTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
+          _payment?.status == MidtransPaymentStatus.pending && !_loading) {
+        _refreshPaymentStatus();
+      }
     });
   }
 
   @override
+  void dispose() {
+    _statusTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        !_loading &&
+        _payment?.status == MidtransPaymentStatus.pending) {
+      _refreshPaymentStatus();
+    }
+  }
+
+  Future<void> _createPayment(String invoiceId) async {
+    final repository = ref.read(midtransPaymentRepositoryProvider);
+    if (repository == null || !repository.hasAuthenticatedSession) {
+      setState(() {
+        _errorMessage =
+            'Pembayaran Sandbox memerlukan akun Supabase yang sudah masuk '
+            'dan terhubung ke ID pelanggan.';
+      });
+      return;
+    }
+
+    setState(() => _loading = true);
+    try {
+      final payment = await repository.createPayment(invoiceId);
+      if (!mounted) return;
+      setState(() {
+        _payment = payment;
+        _errorMessage = null;
+      });
+      await _openCheckout(payment);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = error is MidtransPaymentException
+              ? error.message
+              : 'Pembayaran gagal dibuat: $error';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _openCheckout(MidtransPayment payment) async {
+    try {
+      final opened = await launchUrl(
+        Uri.parse(payment.redirectUrl),
+        mode: LaunchMode.externalApplication,
+        webOnlyWindowName: '_self',
+      );
+      if (!opened && mounted) {
+        setState(() {
+          _errorMessage =
+              'Halaman Midtrans tidak dapat dibuka. Tekan "Buka checkout" '
+              'untuk mencoba lagi.';
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(
+          () => _errorMessage = 'Checkout Midtrans gagal dibuka: $error',
+        );
+      }
+    }
+  }
+
+  Future<void> _refreshPaymentStatus() async {
+    final payment = _payment;
+    final repository = ref.read(midtransPaymentRepositoryProvider);
+    if (payment == null || repository == null || _loading) return;
+
+    setState(() {
+      _loading = true;
+      _errorMessage = null;
+    });
+    try {
+      final updatedPayment = await repository.refreshStatus(payment.orderId);
+      if (mounted) {
+        setState(() => _payment = updatedPayment);
+        if (updatedPayment.status == MidtransPaymentStatus.paid) {
+          _statusTimer?.cancel();
+          _refreshPaidData(ref);
+          context.go('/billing');
+          showAppMessage(context, 'Pembayaran berhasil. Masa aktif sudah diperbarui.');
+        }
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(
+          () => _errorMessage = 'Status pembayaran gagal diperiksa: $error',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final invoice = ref
-        .watch(mockRepositoryProvider)
-        .invoiceById(widget.invoiceId);
+    final repository = ref.watch(midtransPaymentRepositoryProvider);
+    final canPay = repository?.hasAuthenticatedSession ?? false;
+    final invoiceState = ref.watch(invoicesProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Pembayaran')),
-      body: invoice == null
-          ? const EmptyState(
+      body: invoiceState.when(
+        loading: () => const LoadingState(),
+        error: (_, _) =>
+            ErrorState(onRetry: () => ref.invalidate(invoicesProvider)),
+        data: (invoices) {
+          final invoice = invoices
+              .where((invoice) => invoice.id == widget.invoiceId)
+              .firstOrNull;
+          if (invoice == null) {
+            return const EmptyState(
               title: 'Invoice tidak ditemukan',
-              message: 'Kembali ke daftar tagihan untuk memilih invoice lain.',
-            )
-          : ListView(
-              padding: const EdgeInsets.all(20),
-              children: [
-                const PageHeading(
-                  title: 'Selesaikan pembayaran',
-                  subtitle: 'Pilih cara pembayaran yang Anda inginkan',
-                ),
-                const SizedBox(height: 18),
-                SurfaceCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Total tagihan',
-                        style: TextStyle(color: AppTheme.textSecondary),
+              message:
+                  'Tagihan ini tidak tersedia untuk akun yang sedang masuk.',
+            );
+          }
+          return ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              const PageHeading(
+                title: 'Selesaikan pembayaran',
+                subtitle: 'Pilih metode di halaman checkout Midtrans',
+              ),
+              const SizedBox(height: 18),
+              SurfaceCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Total tagihan',
+                      style: TextStyle(color: AppTheme.textSecondary),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      formatRupiah(_payment?.amount ?? invoice.amount),
+                      style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
                       ),
-                      const SizedBox(height: 5),
-                      Text(
-                        formatRupiah(invoice.amount),
-                        style: const TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                        ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      invoice.id,
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 12,
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        invoice.id,
-                        style: const TextStyle(
-                          color: AppTheme.textSecondary,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 20),
-                const SectionHeading(title: 'Metode pembayaran'),
-                _PaymentChoice(
-                  icon: Icons.qr_code_2_rounded,
-                  title: 'QRIS',
-                  subtitle: 'Pindai melalui aplikasi pembayaran',
-                  selected: _method == 'QRIS',
-                  onTap: () => setState(() => _method = 'QRIS'),
-                ),
-                _PaymentChoice(
-                  icon: Icons.account_balance_outlined,
-                  title: 'Virtual Account',
-                  subtitle: 'BCA, Mandiri, BNI, dan bank lainnya',
-                  selected: _method == 'Virtual Account',
-                  onTap: () => setState(() => _method = 'Virtual Account'),
-                ),
-                _PaymentChoice(
-                  icon: Icons.wallet_outlined,
-                  title: 'E-wallet',
-                  subtitle: 'GoPay, OVO, dan DANA',
-                  selected: _method == 'E-wallet',
-                  onTap: () => setState(() => _method = 'E-wallet'),
-                ),
-                if (_instructionsVisible) ...[
-                  const SizedBox(height: 12),
-                  _PaymentInstruction(method: _method),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: _method == 'QRIS'
-                        ? () => showAppMessage(
-                            context,
-                            'QRIS belum tersedia karena payment gateway belum dikonfigurasi. '
-                            'Instruksi demo ini tidak dapat digunakan untuk membayar.',
-                          )
-                        : () => _copyToClipboard(
-                            context,
-                            _method == 'Virtual Account'
-                                ? 'Invoice: ${invoice.id}\n'
-                                      'Metode: Virtual Account\n'
-                                      'Nomor VA: 8808 0012 9950 2026\n'
-                                      'Jumlah: ${formatRupiah(invoice.amount)}'
-                                : 'Invoice: ${invoice.id}\n'
-                                      'Metode: E-wallet\n'
-                                      'Jumlah: ${formatRupiah(invoice.amount)}',
-                            'Instruksi pembayaran',
+              ),
+              const SizedBox(height: 20),
+              const SectionHeading(title: 'Checkout aman'),
+              SurfaceCard(
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.lock_outline,
+                      color: AppTheme.primaryBlue,
+                      size: 28,
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Midtrans Snap',
+                            style: TextStyle(fontWeight: FontWeight.w700),
                           ),
-                    icon: Icon(
-                      _method == 'QRIS'
-                          ? Icons.info_outline
-                          : Icons.copy_outlined,
+                          SizedBox(height: 4),
+                          Text(
+                            'Pilih QRIS, Virtual Account, atau e-wallet '
+                            'di halaman checkout Midtrans.',
+                            style: TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 12,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    label: Text(
-                      _method == 'QRIS'
-                          ? 'Info ketersediaan QRIS'
-                          : 'Salin instruksi',
+                    const SizedBox(width: 8),
+                    const StatusPill(
+                      label: 'SANDBOX',
+                      color: AppTheme.primaryBlue,
                     ),
-                  ),
-                ],
-                const SizedBox(height: 16),
+                  ],
+                ),
+              ),
+              if (_payment case final payment?) ...[
+                const SizedBox(height: 12),
+                _PaymentReceiptCard(payment: payment),
+              ],
+              if (_errorMessage case final error?) ...[
+                const SizedBox(height: 12),
+                _InfoNotice(text: error),
+              ],
+              const SizedBox(height: 16),
+              if (_payment == null && invoice.status == InvoiceStatus.unpaid)
                 ElevatedButton(
-                  onPressed: _loading
+                  onPressed: _loading || !canPay
                       ? null
-                      : _instructionsVisible
-                      ? () => showAppMessage(
-                          context,
-                          'Status masih menunggu konfirmasi server. Pembayaran demo tidak ditandai lunas.',
-                        )
-                      : _createPayment,
+                      : () => _createPayment(invoice.id),
                   child: _loading
                       ? const SizedBox(
                           width: 20,
@@ -310,116 +428,322 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
                             color: AppTheme.white,
                           ),
                         )
-                      : Text(
-                          _instructionsVisible
-                              ? 'Periksa status pembayaran'
-                              : 'Buat instruksi pembayaran',
-                        ),
+                      : const Text('Lanjutkan ke Midtrans Sandbox'),
                 ),
+              if (_payment == null &&
+                  invoice.status != InvoiceStatus.unpaid) ...[
+                const SizedBox(height: 12),
+                const _InfoNotice(
+                  text: 'Invoice ini tidak lagi menunggu pembayaran.',
+                ),
+              ],
+              if (_payment != null) ...[
+                if (_payment!.status == MidtransPaymentStatus.pending) ...[
+                  OutlinedButton.icon(
+                    onPressed: _loading ? null : () => _openCheckout(_payment!),
+                    icon: const Icon(Icons.open_in_new),
+                    label: const Text('Buka checkout'),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton(
+                    onPressed: _loading ? null : _refreshPaymentStatus,
+                    child: _loading
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppTheme.white,
+                            ),
+                          )
+                        : const Text('Periksa status pembayaran'),
+                  ),
+                ] else if (_payment!.status == MidtransPaymentStatus.failed ||
+                    _payment!.status == MidtransPaymentStatus.expired ||
+                    _payment!.status == MidtransPaymentStatus.cancelled)
+                  OutlinedButton(
+                    onPressed: _loading
+                        ? null
+                        : () => setState(() {
+                            _payment = null;
+                            _errorMessage = null;
+                          }),
+                    child: const Text('Buat transaksi baru'),
+                  ),
+              ],
+              if (!canPay && _payment == null) ...[
                 const SizedBox(height: 12),
                 const _InfoNotice(
                   text:
-                      'Mode pratinjau. Transaksi belum dibuat di Midtrans/Xendit. '
-                      'Tagihan hanya dapat ditandai lunas oleh konfirmasi server.',
+                      'Untuk menguji pembayaran, masuk dengan akun Supabase '
+                      'yang terhubung ke pelanggan. Akun demo lokal tidak '
+                      'dapat membuat transaksi.',
                 ),
               ],
-            ),
-    );
-  }
-}
-
-class _PaymentChoice extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _PaymentChoice({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: SurfaceCard(
-        onTap: onTap,
-        child: Row(
-          children: [
-            Icon(icon, color: AppTheme.primaryBlue, size: 25),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      color: AppTheme.textSecondary,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 12),
+              const _InfoNotice(
+                text:
+                    'Transaksi menggunakan Midtrans Sandbox. Status lunas '
+                    'hanya diperbarui setelah dikonfirmasi oleh Midtrans.',
               ),
-            ),
-            Icon(
-              selected ? Icons.radio_button_checked : Icons.radio_button_off,
-              color: selected ? AppTheme.primaryBlue : AppTheme.textSecondary,
-            ),
-          ],
-        ),
+            ],
+          );
+        },
       ),
     );
   }
 }
 
-class _PaymentInstruction extends StatelessWidget {
-  final String method;
+class PaymentResultScreen extends ConsumerStatefulWidget {
+  final String orderId;
 
-  const _PaymentInstruction({required this.method});
+  const PaymentResultScreen({super.key, required this.orderId});
+
+  @override
+  ConsumerState<PaymentResultScreen> createState() =>
+      _PaymentResultScreenState();
+}
+
+class _PaymentResultScreenState extends ConsumerState<PaymentResultScreen> {
+  bool _loading = false;
+  bool _requestInProgress = false;
+  Timer? _statusTimer;
+  MidtransPayment? _payment;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _statusTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
+          _payment?.status == MidtransPaymentStatus.pending) {
+        _refreshStatus();
+      }
+    });
+    if (widget.orderId.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _refreshStatus());
+    }
+  }
+
+  @override
+  void dispose() {
+    _statusTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant PaymentResultScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.orderId != widget.orderId) {
+      _payment = null;
+      _errorMessage = null;
+      if (widget.orderId.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _refreshStatus());
+      }
+    }
+  }
+
+  Future<void> _refreshStatus() async {
+    if (_requestInProgress || widget.orderId.isEmpty) return;
+    _requestInProgress = true;
+    setState(() {
+      _loading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final repository = ref.read(midtransPaymentRepositoryProvider);
+      if (repository == null || !repository.hasAuthenticatedSession) {
+        throw StateError(
+          'Masuk kembali ke akun pelanggan untuk melihat bukti transaksi.',
+        );
+      }
+      final payment = await repository.refreshStatus(widget.orderId);
+      if (!mounted) return;
+      setState(() => _payment = payment);
+      if (payment.status == MidtransPaymentStatus.paid) {
+        _statusTimer?.cancel();
+        _refreshPaidData(ref);
+        context.go('/billing');
+        showAppMessage(context, 'Pembayaran berhasil. Masa aktif sudah diperbarui.');
+      }
+    } catch (error) {
+      if (mounted) setState(() => _errorMessage = error.toString());
+    } finally {
+      _requestInProgress = false;
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SurfaceCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    final payment = _payment;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Bukti transaksi')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
         children: [
-          const Text(
-            'Instruksi demo',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-          ),
-          const SizedBox(height: 10),
-          if (method == 'QRIS')
-            const Text(
-              'Kode QR belum tersedia karena payment gateway belum dikonfigurasi. '
-              'Tagihan ini belum dapat dibayar melalui QRIS.',
-              style: TextStyle(color: AppTheme.textSecondary, height: 1.4),
+          if (widget.orderId.isEmpty)
+            const _InfoNotice(
+              text:
+                  'ID transaksi tidak ditemukan pada tautan kembali Midtrans.',
             )
-          else
-            Text(
-              method == 'Virtual Account'
-                  ? '8808 0012 9950 2026'
-                  : 'Pembayaran melalui aplikasi e-wallet',
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+          else if (payment != null) ...[
+            _PaymentReceiptCard(payment: payment),
+            if (_errorMessage case final error?) ...[
+              const SizedBox(height: 12),
+              _InfoNotice(text: error),
+            ],
+            const SizedBox(height: 16),
+            if (payment.status == MidtransPaymentStatus.pending)
+              ElevatedButton.icon(
+                onPressed: _loading ? null : _refreshStatus,
+                icon: const Icon(Icons.refresh),
+                label: Text(
+                  _loading ? 'Memeriksa status...' : 'Periksa status lagi',
+                ),
+              ),
+            if (payment.status == MidtransPaymentStatus.cancelled ||
+                payment.status == MidtransPaymentStatus.failed ||
+                payment.status == MidtransPaymentStatus.expired)
+              OutlinedButton(
+                onPressed: () => context.go('/payment/${payment.invoiceId}'),
+                child: const Text('Coba pembayaran lagi'),
+              ),
+          ] else if (_loading)
+            const LoadingState()
+          else ...[
+            _InfoNotice(
+              text: _errorMessage ?? 'Bukti transaksi belum dapat dimuat.',
             ),
-          const Text(
-            'Batas pembayaran 14 November 2026, 23.59 WIB.',
-            style: TextStyle(color: AppTheme.textSecondary),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: _loading ? null : _refreshStatus,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Coba lagi'),
+            ),
+          ],
+          const SizedBox(height: 12),
+          OutlinedButton(
+            onPressed: () => context.go('/billing'),
+            child: const Text('Kembali ke tagihan'),
           ),
         ],
       ),
     );
   }
+}
+
+class _PaymentReceiptCard extends StatelessWidget {
+  final MidtransPayment payment;
+
+  const _PaymentReceiptCard({required this.payment});
+
+  @override
+  Widget build(BuildContext context) {
+    final (color, icon, description) = switch (payment.status) {
+      MidtransPaymentStatus.paid => (
+        AppTheme.success,
+        Icons.check_circle_outline,
+        'Pembayaran telah dikonfirmasi oleh Midtrans.',
+      ),
+      MidtransPaymentStatus.pending => (
+        AppTheme.warning,
+        Icons.schedule,
+        payment.statusMessage ??
+            'Selesaikan pembayaran di checkout Midtrans. '
+                'Status diperiksa otomatis setiap 10 detik saat halaman aktif.',
+      ),
+      MidtransPaymentStatus.cancelled => (
+        AppTheme.error,
+        Icons.cancel_outlined,
+        'Transaksi dibatalkan dan tidak tercatat sebagai pembayaran lunas.',
+      ),
+      MidtransPaymentStatus.failed => (
+        AppTheme.error,
+        Icons.error_outline,
+        'Pembayaran gagal diproses.',
+      ),
+      MidtransPaymentStatus.expired => (
+        AppTheme.error,
+        Icons.timer_off_outlined,
+        'Waktu pembayaran telah kedaluwarsa.',
+      ),
+    };
+
+    final receipt = [
+      'Bukti transaksi SpaceNet',
+      'Status: ${payment.status.label}',
+      'Invoice: ${payment.invoiceId}',
+      'ID transaksi: ${payment.orderId}',
+      if (payment.transactionId != null)
+        'Referensi Midtrans: ${payment.transactionId}',
+      if (payment.paymentType != null) 'Metode: ${payment.paymentType}',
+      'Jumlah: ${formatRupiah(payment.amount)}',
+      if (payment.updatedAt != null)
+        'Waktu: ${_formatPaymentDate(payment.updatedAt!)}',
+    ].join('\n');
+
+    return SurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionHeading(title: 'Bukti transaksi'),
+          Row(
+            children: [
+              Icon(icon, color: color, size: 30),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  payment.status.label,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Salin bukti transaksi',
+                onPressed: () =>
+                    _copyToClipboard(context, receipt, 'Bukti transaksi'),
+                icon: const Icon(Icons.copy_outlined),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(description),
+          const Divider(height: 24),
+          _DetailRow(label: 'Nomor invoice', value: payment.invoiceId),
+          _DetailRow(label: 'ID transaksi', value: payment.orderId),
+          if (payment.transactionId != null)
+            _DetailRow(
+              label: 'Referensi Midtrans',
+              value: payment.transactionId!,
+            ),
+          if (payment.paymentType != null)
+            _DetailRow(label: 'Metode pembayaran', value: payment.paymentType!),
+          _DetailRow(
+            label: 'Jumlah',
+            value: formatRupiah(payment.amount),
+            emphasized: true,
+          ),
+          if (payment.updatedAt != null)
+            _DetailRow(
+              label: 'Waktu pembaruan',
+              value: _formatPaymentDate(payment.updatedAt!),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatPaymentDate(DateTime dateTime) {
+  final local = dateTime.toLocal();
+  String twoDigits(int value) => value.toString().padLeft(2, '0');
+  return '${twoDigits(local.day)}/${twoDigits(local.month)}/${local.year} '
+      '${twoDigits(local.hour)}:${twoDigits(local.minute)}';
 }
 
 class UpgradeScreen extends StatefulWidget {
@@ -455,11 +779,9 @@ class _UpgradeScreenState extends State<UpgradeScreen> {
     );
     if (confirmed != true || !mounted) return;
 
-    final request = ProviderScope.containerOf(
-      context,
-    ).read(mockRepositoryProvider).submitPackageChangeRequest(
-      _selectedPackage,
-    );
+    final request = ProviderScope.containerOf(context)
+        .read(mockRepositoryProvider)
+        .submitPackageChangeRequest(_selectedPackage);
     setState(() => _request = request);
     showAppMessage(
       context,
@@ -654,7 +976,10 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
       });
     } on PlatformException catch (error) {
       if (mounted) {
-        showAppMessage(context, 'Foto tidak dapat dipilih. ${error.message ?? ''}');
+        showAppMessage(
+          context,
+          'Foto tidak dapat dipilih. ${error.message ?? ''}',
+        );
       }
     } on Exception catch (error) {
       if (mounted) showAppMessage(context, 'Foto tidak dapat dibaca. $error');
@@ -747,19 +1072,13 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
                     ? Icons.delete_outline
                     : Icons.add_a_photo_outlined,
               ),
-              label: Text(
-                _photoBytes != null ? 'Hapus foto' : 'Pilih foto',
-              ),
+              label: Text(_photoBytes != null ? 'Hapus foto' : 'Pilih foto'),
             ),
             if (_photoBytes case final photoBytes?) ...[
               const SizedBox(height: 10),
               ClipRRect(
                 borderRadius: BorderRadius.circular(14),
-                child: Image.memory(
-                  photoBytes,
-                  height: 180,
-                  fit: BoxFit.cover,
-                ),
+                child: Image.memory(photoBytes, height: 180, fit: BoxFit.cover),
               ),
               if (_photoName case final photoName?)
                 Padding(
@@ -890,17 +1209,12 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                         const SizedBox(height: 14),
                         Text(
                           ticket.photoName ?? 'Lampiran foto',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                          ),
+                          style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: 8),
                         ClipRRect(
                           borderRadius: BorderRadius.circular(12),
-                          child: Image.memory(
-                            photoBytes,
-                            fit: BoxFit.cover,
-                          ),
+                          child: Image.memory(photoBytes, fit: BoxFit.cover),
                         ),
                       ],
                     ],
@@ -984,101 +1298,83 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
 
 class TransactionsScreen extends ConsumerWidget {
   const TransactionsScreen({super.key});
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final transactions = ref.watch(mockRepositoryProvider).transactions;
+    final state = ref.watch(paymentHistoryProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Riwayat transaksi')),
-      body: transactions.isEmpty
-          ? const EmptyState(
-              title: 'Belum ada transaksi',
-              message: 'Pembayaran yang berhasil akan tercatat di sini.',
-              icon: Icons.receipt_long_outlined,
-            )
-          : ListView(
-              padding: const EdgeInsets.all(20),
-              children: [
-                const PageHeading(
-                  title: 'Semua transaksi',
-                  subtitle: 'Riwayat pembayaran SpaceNet Anda',
-                ),
+      body: state.when(
+        loading: () => const LoadingState(),
+        error: (_, _) => ErrorState(onRetry: () => ref.invalidate(paymentHistoryProvider)),
+        data: (transactions) => RefreshIndicator(
+          onRefresh: () async { await ref.refresh(paymentHistoryProvider.future); },
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(20),
+            children: [
+              if (transactions.isEmpty)
+                const EmptyState(
+                  title: 'Belum ada transaksi',
+                  message: 'Pembayaran yang berhasil akan tercatat di sini.',
+                  icon: Icons.receipt_long_outlined,
+                )
+              else ...[
+                const PageHeading(title: 'Semua transaksi', subtitle: 'Riwayat pembayaran SpaceNet Anda'),
                 const SizedBox(height: 18),
-                ...transactions.map(
-                  (transaction) => Padding(
+                for (final transaction in transactions)
+                  Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: SurfaceCard(
-                      onTap: () =>
-                          context.push('/transactions/${transaction.id}'),
-                      child: Row(
-                        children: [
-                          const CircleAvatar(
-                            backgroundColor: Color(0xFFE8F6EF),
-                            child: Icon(
-                              Icons.check_rounded,
-                              color: AppTheme.success,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  transaction.id,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '${transaction.date} • ${transaction.method}',
-                                  style: const TextStyle(
-                                    color: AppTheme.textSecondary,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                const SizedBox(height: 5),
-                                Text(
-                                  formatRupiah(transaction.amount),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const Icon(
-                            Icons.chevron_right,
-                            color: AppTheme.textSecondary,
-                          ),
-                        ],
-                      ),
+                      onTap: () => context.push('/transactions/${transaction.id}'),
+                      child: Row(children: [
+                        const CircleAvatar(
+                          backgroundColor: Color(0xFFE8F6EF),
+                          child: Icon(Icons.check_rounded, color: AppTheme.success),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(transaction.invoiceId, style: const TextStyle(fontWeight: FontWeight.w700)),
+                            const SizedBox(height: 4),
+                            Text('${transaction.date} • ${transaction.method}',
+                              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                            const SizedBox(height: 5),
+                            Text(formatRupiah(transaction.amount),
+                              style: const TextStyle(fontWeight: FontWeight.w700)),
+                            const Text('Lunas', style: TextStyle(color: AppTheme.success)),
+                          ],
+                        )),
+                        const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
+                      ]),
                     ),
                   ),
-                ),
               ],
-            ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
 
 class TransactionDetailScreen extends ConsumerWidget {
   final String transactionId;
-
   const TransactionDetailScreen({super.key, required this.transactionId});
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final transaction = ref
-        .watch(mockRepositoryProvider)
-        .transactionById(transactionId);
+    final state = ref.watch(paymentHistoryProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Detail transaksi')),
-      body: transaction == null
+      body: state.when(
+        loading: () => const LoadingState(),
+        error: (_, _) => ErrorState(onRetry: () => ref.invalidate(paymentHistoryProvider)),
+        data: (transactions) {
+          final transaction = transactions.where((item) => item.id == transactionId).firstOrNull;
+          return transaction == null
           ? const EmptyState(
               title: 'Transaksi tidak ditemukan',
-              message: 'Transaksi ini tidak tersedia pada data pratinjau.',
+              message: 'Transaksi ini tidak ditemukan pada akun Anda.',
             )
           : ListView(
               padding: const EdgeInsets.all(20),
@@ -1136,11 +1432,11 @@ class TransactionDetailScreen extends ConsumerWidget {
                   onPressed: () => _copyToClipboard(
                     context,
                     'Resi: ${transaction.id}\n'
-                    'Invoice: ${transaction.invoiceId}\n'
-                    'Tanggal: ${transaction.date}\n'
-                    'Metode: ${transaction.method}\n'
-                    'Jumlah: ${formatRupiah(transaction.amount)}\n'
-                    'Status: ${transaction.status}',
+                        'Invoice: ${transaction.invoiceId}\n'
+                        'Tanggal: ${transaction.date}\n'
+                        'Metode: ${transaction.method}\n'
+                        'Jumlah: ${formatRupiah(transaction.amount)}\n'
+                        'Status: ${transaction.status}',
                     'Resi transaksi',
                   ),
                   icon: const Icon(Icons.copy_outlined),
@@ -1151,17 +1447,19 @@ class TransactionDetailScreen extends ConsumerWidget {
                   onPressed: () => _copyToClipboard(
                     context,
                     'Bukti pembayaran SpaceNet\n'
-                    'Transaksi: ${transaction.id}\n'
-                    'Invoice: ${transaction.invoiceId}\n'
-                    'Jumlah: ${formatRupiah(transaction.amount)}\n'
-                    'Status: ${transaction.status}',
+                        'Transaksi: ${transaction.id}\n'
+                        'Invoice: ${transaction.invoiceId}\n'
+                        'Jumlah: ${formatRupiah(transaction.amount)}\n'
+                        'Status: ${transaction.status}',
                     'Bukti pembayaran',
                   ),
                   icon: const Icon(Icons.copy_outlined),
                   label: const Text('Salin bukti pembayaran'),
                 ),
               ],
-            ),
+            );
+        },
+      ),
     );
   }
 }
@@ -1894,4 +2192,11 @@ class _InfoNotice extends StatelessWidget {
       ),
     );
   }
+}
+
+void _refreshPaidData(WidgetRef ref) {
+  ref.invalidate(invoicesProvider);
+  ref.invalidate(paymentHistoryProvider);
+  ref.invalidate(activeCustomerProvider);
+  ref.invalidate(customerProfileProvider);
 }

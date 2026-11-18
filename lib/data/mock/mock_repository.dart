@@ -2,23 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-enum InvoiceStatus { unpaid, paid, expired }
-
-class MockInvoice {
-  final String id;
-  final String period;
-  final int amount;
-  final DateTime dueDate;
-  final InvoiceStatus status;
-
-  const MockInvoice({
-    required this.id,
-    required this.period,
-    required this.amount,
-    required this.dueDate,
-    required this.status,
-  });
-}
+import '../models/invoice_model.dart';
 
 class MockTicket {
   final String id;
@@ -71,22 +55,22 @@ class MockPackageChangeRequest {
 }
 
 class MockRepository {
-  final List<MockInvoice> _invoices = [
-    MockInvoice(
+  final List<InvoiceModel> _invoices = [
+    InvoiceModel(
       id: 'INV-2026-10-001',
       period: 'Oktober 2026',
       amount: 249000,
       dueDate: DateTime(2026, 11, 14),
       status: InvoiceStatus.unpaid,
     ),
-    MockInvoice(
+    InvoiceModel(
       id: 'INV-2026-09-001',
       period: 'September 2026',
       amount: 249000,
       dueDate: DateTime(2026, 10, 14),
       status: InvoiceStatus.paid,
     ),
-    MockInvoice(
+    InvoiceModel(
       id: 'INV-2026-08-001',
       period: 'Agustus 2026',
       amount: 249000,
@@ -126,15 +110,15 @@ class MockRepository {
     ),
   ];
 
-  List<MockInvoice> get invoices => List.unmodifiable(_invoices);
+  List<InvoiceModel> get invoices => List.unmodifiable(_invoices);
   List<MockTicket> get tickets => List.unmodifiable(_tickets);
   List<MockPackageChangeRequest> get packageChangeRequests =>
       List.unmodifiable(_packageChangeRequests);
-  MockInvoice? get currentInvoice => _invoices
+  InvoiceModel? get currentInvoice => _invoices
       .where((invoice) => invoice.status == InvoiceStatus.unpaid)
       .firstOrNull;
 
-  Future<List<MockInvoice>> loadInvoices() async {
+  Future<List<InvoiceModel>> loadInvoices() async {
     await Future<void>.delayed(const Duration(milliseconds: 350));
     return invoices;
   }
@@ -173,7 +157,7 @@ class MockRepository {
     return request;
   }
 
-  MockInvoice? invoiceById(String id) {
+  InvoiceModel? invoiceById(String id) {
     for (final invoice in _invoices) {
       if (invoice.id == id) return invoice;
     }

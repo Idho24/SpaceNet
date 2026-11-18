@@ -13,11 +13,15 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:spacenet/core/routing/app_router.dart';
 import 'package:spacenet/core/supabase/supabase_runtime_config.dart';
 import 'package:spacenet/data/models/customer_model.dart';
+import 'package:spacenet/data/models/invoice_model.dart';
+import 'package:spacenet/data/repositories/invoice_repository.dart';
+import 'package:spacenet/data/repositories/midtrans_payment_repository.dart';
 import 'package:spacenet/data/repositories/auth_repository.dart';
 import 'package:spacenet/data/repositories/customer_repository.dart';
 import 'package:spacenet/data/repositories/otp_repository.dart';
 import 'package:spacenet/features/auth/auth_state.dart';
 import 'package:spacenet/features/auth/registration_controller.dart';
+import 'package:spacenet/features/screens/detail_screens.dart';
 import 'package:spacenet/main.dart';
 
 const _offlineSupabaseConfig = SupabaseRuntimeConfig(
@@ -204,7 +208,7 @@ void main() {
     expect(find.text('Home Fiber 300 Mbps'), findsWidgets);
   });
 
-  testWidgets('payment instructions stay pending until server confirmation', (
+  testWidgets('sandbox checkout requires an authenticated Supabase session', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(360, 800);
@@ -216,12 +220,122 @@ void main() {
 
     await tester.tap(find.text('Bayar sekarang'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Virtual Account'));
-    await tester.tap(find.text('Buat instruksi pembayaran'));
-    await tester.pump(const Duration(milliseconds: 700));
+    expect(find.text('Midtrans Snap'), findsOneWidget);
+    expect(find.text('Lanjutkan ke Midtrans Sandbox'), findsOneWidget);
+    final paymentButton = tester.widget<ElevatedButton>(
+      find.widgetWithText(ElevatedButton, 'Lanjutkan ke Midtrans Sandbox'),
+    );
+    expect(paymentButton.onPressed, isNull);
+    expect(find.textContaining('Akun demo lokal tidak'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('payment screen rejects invoices not returned for the account', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          supabaseRuntimeConfigProvider.overrideWithValue(
+            _offlineSupabaseConfig,
+          ),
+          invoicesProvider.overrideWith((ref) async => []),
+        ],
+        child: const MaterialApp(
+          home: PaymentScreen(invoiceId: 'INV-2026-10-001'),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
-    expect(find.text('Instruksi demo'), findsOneWidget);
-    expect(find.textContaining('8808 0012'), findsOneWidget);
+
+    expect(
+      find.text('Tagihan ini tidak tersedia untuk akun yang sedang masuk.'),
+      findsOneWidget,
+    );
+    expect(find.text('Lanjutkan ke Midtrans Sandbox'), findsNothing);
+  });
+
+  testWidgets(
+    'invoice details show the persisted amount, not demo line items',
+    (tester) async {
+      final invoice = InvoiceModel(
+        id: 'INV-2026-12-0012995',
+        period: 'Desember 2026',
+        amount: 350000,
+        dueDate: DateTime(2026, 12, 15),
+        status: InvoiceStatus.unpaid,
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            invoicesProvider.overrideWith((ref) async => [invoice]),
+          ],
+          child: MaterialApp(home: InvoiceDetailScreen(invoiceId: invoice.id)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('350.000'), findsOneWidget);
+      expect(find.text('Home Fiber 200 Mbps'), findsNothing);
+      expect(find.textContaining('249.000'), findsNothing);
+    },
+  );
+
+  testWidgets('payment result shows verified status and a copyable receipt', (
+    tester,
+  ) async {
+    for (final status in [
+      MidtransPaymentStatus.pending,
+      MidtransPaymentStatus.cancelled,
+    ]) {
+      final payment = MidtransPayment(
+        orderId: 'SPN-test-${status.name}',
+        invoiceId: 'INV-2026-12-0012995',
+        redirectUrl: 'https://app.sandbox.midtrans.com/snap/v2/vtweb/test',
+        amount: 170000,
+        status: status,
+        paymentType: 'qris',
+        transactionId: 'midtrans-${status.name}',
+        updatedAt: DateTime.utc(2026, 11, 17, 10),
+      );
+      final repository = _FakeMidtransPaymentRepository(payment);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            midtransPaymentRepositoryProvider.overrideWithValue(repository),
+          ],
+          child: MaterialApp(
+            home: PaymentResultScreen(orderId: payment.orderId),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(payment.status.label),
+        findsOneWidget,
+        reason: 'Receipt should show ${status.label}.',
+      );
+      expect(find.text(payment.invoiceId), findsOneWidget);
+      expect(find.text(payment.orderId), findsOneWidget);
+      expect(find.text('qris'), findsOneWidget);
+      expect(find.textContaining('170.000'), findsOneWidget);
+      expect(find.byTooltip('Salin bukti transaksi'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('payment return query at the app root opens the receipt route', (
+    tester,
+  ) async {
+    final container = await _signInAndLinkDemo(tester);
+
+    container.read(routerProvider).go('/?order_id=SPN-returned-order');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Bukti transaksi'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -269,6 +383,7 @@ void main() {
       '/profile',
       '/invoice/INV-2026-10-001',
       '/payment/INV-2026-10-001',
+      '/payment-result?order_id=SPN-test-order',
       '/subscription/upgrade',
       '/tickets/new',
       '/tickets/SPN-2042',
@@ -343,6 +458,7 @@ void main() {
               isTestingMode: true,
             ),
           ),
+          invoicesProvider.overrideWith((ref) async => []),
         ],
       );
       addTearDown(container.dispose);
@@ -424,6 +540,21 @@ void main() {
     expect(otp.isDemo, isFalse);
     expect(otp.debugCode, isNull);
   });
+}
+
+class _FakeMidtransPaymentRepository implements MidtransPaymentRepository {
+  final MidtransPayment payment;
+
+  const _FakeMidtransPaymentRepository(this.payment);
+
+  @override
+  bool get hasAuthenticatedSession => true;
+
+  @override
+  Future<MidtransPayment> createPayment(String invoiceId) async => payment;
+
+  @override
+  Future<MidtransPayment> refreshStatus(String orderId) async => payment;
 }
 
 Future<ProviderContainer> _signInAndLinkDemo(
