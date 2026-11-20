@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/auth_repository.dart';
 import '../../data/repositories/otp_repository.dart';
+import '../../data/repositories/push_notification_repository.dart';
 
 enum AuthStatus { loading, unauthenticated, authenticated, error }
 
@@ -77,6 +78,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   Future<void> signOut() async {
     state = const AuthState.loading();
     try {
+      await PushNotificationRepository.instance.unregisterBeforeLogout();
       await _repository.signOut();
       state = const AuthState.unauthenticated();
     } on Exception catch (error) {

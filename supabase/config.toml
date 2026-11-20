@@ -6,3 +6,7 @@ verify_jwt = true
 
 [functions.midtrans-webhook]
 verify_jwt = false
+
+[functions.dispatch-service-push]
+# Authenticated by a random server-only key held in the private database schema.
+verify_jwt = false

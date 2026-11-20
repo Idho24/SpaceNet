@@ -5,13 +5,14 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_components.dart';
 import '../../core/widgets/brand_logo.dart';
-import '../../data/mock/mock_repository.dart';
 import '../../data/models/customer_model.dart';
 import '../../data/models/invoice_model.dart';
 import '../../data/models/payment_transaction.dart';
 import '../../data/repositories/customer_repository.dart';
 import '../../data/repositories/invoice_repository.dart';
 import '../auth/auth_state.dart';
+import '../support/support_screens.dart';
+import '../notifications/announcement_screens.dart' show NotificationBell, ServiceAnnouncementBanner;
 
 class HomeScreen extends StatefulWidget {
   final int initialTab;
@@ -179,14 +180,11 @@ class DashboardTab extends ConsumerWidget {
                 ],
               ),
             ),
-            IconButton.filledTonal(
-              tooltip: 'Notifikasi',
-              onPressed: () => context.push('/notifications'),
-              icon: const Icon(Icons.notifications_none_rounded),
-            ),
+            const NotificationBell(),
           ],
         ),
         const SizedBox(height: 18),
+        const ServiceAnnouncementBanner(),
         _SubscriptionCard(onTap: () => context.go('/subscription')),
         const SizedBox(height: 18),
         _BillingSummary(
@@ -382,7 +380,7 @@ class SubscriptionTab extends ConsumerWidget {
     return _ScrollablePage(
       onRefresh: () async {
         ref.invalidate(invoicesProvider);
-        await ref.refresh(activeCustomerProvider.future);
+        ref.invalidate(activeCustomerProvider); await ref.read(activeCustomerProvider.future);
       },
       children: [
         const PageHeading(title: 'Langganan', subtitle: 'Detail paket dan masa aktif'),
@@ -447,7 +445,7 @@ class SupportTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final tickets = ref.watch(mockRepositoryProvider).tickets;
+
     return _ScrollablePage(
       children: [
         PageHeading(
@@ -508,62 +506,7 @@ class SupportTab extends ConsumerWidget {
           actionLabel: 'Lihat panduan',
           onAction: () => context.push('/help'),
         ),
-        if (tickets.isEmpty)
-          EmptyState(
-            title: 'Belum ada laporan',
-            message: 'Buat tiket jika Anda mengalami gangguan.',
-            actionLabel: 'Buat laporan',
-            onAction: () => context.push('/tickets/new'),
-          )
-        else
-          ...tickets.map(
-            (ticket) => Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: SurfaceCard(
-                onTap: () => context.push('/tickets/${ticket.id}'),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      backgroundColor: Color(0xFFE7F5FB),
-                      child: Icon(
-                        Icons.support_agent,
-                        color: AppTheme.primaryBlue,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            ticket.category,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${ticket.id} • ${ticket.date}',
-                            style: const TextStyle(
-                              color: AppTheme.textSecondary,
-                              fontSize: 12,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          StatusPill(
-                            label: ticket.status,
-                            color: AppTheme.warning,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Icon(
-                      Icons.chevron_right,
-                      color: AppTheme.textSecondary,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+        const CustomerSupportList(),
         const SizedBox(height: 12),
         const SectionHeading(title: 'Panduan cepat'),
         _HelpLink(

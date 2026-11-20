@@ -23,6 +23,8 @@ import 'package:spacenet/features/auth/auth_state.dart';
 import 'package:spacenet/features/auth/registration_controller.dart';
 import 'package:spacenet/features/screens/detail_screens.dart';
 import 'package:spacenet/main.dart';
+import 'package:spacenet/data/repositories/support_repository.dart';
+import 'helpers/fake_support_repository.dart';
 
 const _offlineSupabaseConfig = SupabaseRuntimeConfig(
   url: '',
@@ -32,6 +34,7 @@ const _offlineSupabaseConfig = SupabaseRuntimeConfig(
 ProviderContainer _offlineContainer() => ProviderContainer(
   overrides: [
     supabaseRuntimeConfigProvider.overrideWithValue(_offlineSupabaseConfig),
+    supportRepositoryProvider.overrideWithValue(FakeSupportRepository()),
   ],
 );
 
@@ -358,7 +361,7 @@ void main() {
     await tester.tap(find.text('Kirim laporan'));
     await tester.pump(const Duration(milliseconds: 600));
     await tester.pumpAndSettle();
-    expect(find.text('SPN-2043'), findsOneWidget);
+    expect(find.text('SPN-002043'), findsOneWidget);
     expect(find.text('Perkembangan laporan'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

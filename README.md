@@ -175,3 +175,55 @@ Validasi:
 Untuk aplikasi native, tentukan PAYMENT_RETURN_URL (alamat HTTPS aplikasi)
 saat build, atau MIDTRANS_FINISH_URL pada Edge Function. Deep link native
 memerlukan konfigurasi platform tersendiri.
+
+### Laporan pelanggan dan admin
+
+- Pelanggan: Bantuan → Buat laporan. Kategori, deskripsi, dan foto opsional dikirim
+  ke Supabase; daftar laporan tidak lagi menggunakan data contoh.
+- Admin browser: http://localhost:3000/#/admin/reports (ganti origin jika dihosting).
+  Masuk menggunakan Google **spacenetlite@gmail.com**. Akun admin tidak perlu
+  menghubungkan ID pelanggan. Gunakan profil browser terpisah untuk membuka
+  sesi pelanggan dan admin bersamaan.
+- Status: Laporan diterima → Sedang ditinjau → Dalam penanganan → Selesai.
+  Admin wajib memberi catatan saat mengubah status, dan dapat membuka ulang
+  atau membatalkan laporan. Pelanggan dapat berkomentar atau membatalkan laporan
+  yang masih terbuka. Catatan admin terlihat oleh pelanggan.
+- Daftar dan detail diperbarui otomatis setiap 10 detik. Pelanggan hanya dapat
+  membaca laporannya sendiri. Foto JPG/PNG/WebP maksimal 5 MB disimpan di bucket
+  privat dengan URL sementara yang berlaku 5 menit.
+- Untuk lingkungan baru, terapkan migrasi `20261118132806_support_reports.sql`,
+  lalu jalankan `supabase/operations/support_admin.sql` sebagai operator database.
+  Daftar email admin berada di schema privat; aplikasi tidak dapat mengeditnya.
+  Email harus terverifikasi dan akun anonim tidak mendapat akses admin.
+- ID permintaan tetap mencegah laporan ganda saat pengiriman diulang. Versi laporan
+  mencegah penimpaan oleh pembaruan bersamaan. Status dan catatan tersimpan atomik.
+
+Validasi:
+- Database: `supabase/tests/support_reports_test.sql` (fixture di-rollback).
+- Flutter: `flutter test test/support_flow_test.dart test/widget_test.dart`.
+- Muat kode web terbaru dengan menjalankan ulang:
+  `flutter run -d chrome --web-port 3000 --dart-define-from-file=.env.supabase.local.json`.
+
+### Pengumuman perbaikan dan gangguan massal
+
+Admin membuka `/admin/announcements` atau tombol **Pengumuman layanan** di halaman
+laporan pelanggan. Isi jenis informasi, judul, area terdampak, keterangan, dan
+status, lalu tekan **Terbitkan**. Semua pelanggan yang sudah terhubung dapat
+membaca pengumuman; area adalah keterangan, bukan filter penerima.
+
+Pengumuman muncul di menu Notifikasi dan, selama belum selesai, banner beranda.
+Tanda belum dibaca tersimpan per akun di server. Pembaruan status atau keterangan
+membuat pengumuman menjadi belum dibaca kembali. Daftar dimuat ulang setiap
+10 detik setelah permintaan sebelumnya selesai. Status **Selesai** menghapus
+banner aktif tetapi tetap ada di riwayat; **Arsipkan** menyembunyikan pengumuman
+dari pelanggan. Admin tetap bisa mengakses dan memulihkannya.
+
+Preferensi **Informasi layanan** menyimpan pengaturan banner dan badge per akun.
+Riwayat tetap tersedia saat preferensi dimatikan. Notifikasi ini berada di dalam
+aplikasi, bukan push saat aplikasi/browser ditutup; FCM/Web Push belum dikonfigurasi.
+Menu notifikasi contoh dan pengaturan registrasi perangkat palsu sudah diganti.
+
+Migrasi: `20261120130126_service_announcements.sql`.
+Tes database: `supabase/tests/service_announcements_test.sql`, seluruh fixture
+di-rollback tanpa menerbitkan pengumuman nyata. Tes antarmuka:
+`flutter test test/announcement_flow_test.dart test/support_flow_test.dart test/widget_test.dart`.

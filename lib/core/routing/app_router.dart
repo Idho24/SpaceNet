@@ -4,6 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../features/auth/auth_state.dart';
+import '../../data/repositories/support_repository.dart';
+import '../../data/repositories/push_notification_repository.dart';
+import '../../features/support/support_screens.dart';
+import '../../features/notifications/announcement_screens.dart' show AdminAnnouncementsScreen;
 import '../../features/auth/login_screen.dart';
 import '../../features/auth/registration_screen.dart';
 import '../../features/home/home_screen.dart';
@@ -15,6 +19,9 @@ final routerProvider = Provider<GoRouter>((ref) {
   ref.listen(authNotifierProvider, (previous, next) {
     refreshListenable.refresh();
   });
+  ref.listen(pushInboxRequestedProvider, (_, next) {
+    if (next) refreshListenable.refresh();
+  });
 
   String? pendingPaymentOrderId = kIsWeb ? paymentOrderFromUri(Uri.base) : null;
   final initialPaymentOrderId = pendingPaymentOrderId;
@@ -22,10 +29,13 @@ final routerProvider = Provider<GoRouter>((ref) {
     initialLocation: initialPaymentOrderId == null ? '/' : paymentResultLocation(initialPaymentOrderId),
     overridePlatformDefaultLocation: initialPaymentOrderId != null,
     refreshListenable: refreshListenable,
-    redirect: (context, state) {
+    redirect: (context, state) async {
       final authState = ref.read(authNotifierProvider);
       final location = state.matchedLocation;
       final isEntryRoute = location == '/' || location == '/login';
+
+      // Admin screens own their login/role gate and do not require a customer link.
+      if (location == '/admin/reports' || location.startsWith('/admin/reports/') || location == '/admin/announcements') return null;
 
       pendingPaymentOrderId ??= paymentOrderFromUri(state.uri);
       if (authState.status == AuthStatus.loading) {
@@ -34,6 +44,12 @@ final routerProvider = Provider<GoRouter>((ref) {
 
       if (!authState.isAuthenticated) {
         return isEntryRoute ? null : '/login';
+      }
+
+      if (isEntryRoute) {
+        try {
+          if (await ref.read(supportAdminProvider.future)) return '/admin/reports';
+        } catch (_) { /* The admin page provides its own retry state. */ }
       }
 
       if (!authState.user!.isCustomerLinked) {
@@ -49,12 +65,21 @@ final routerProvider = Provider<GoRouter>((ref) {
         if (state.uri.toString() != target) return target;
       }
 
+      if (ref.read(pushInboxRequestedProvider)) {
+        ref.read(pushInboxRequestedProvider.notifier).state = false;
+        PushNotificationRepository.instance.openInboxOnStart = false;
+        return location == '/notifications' ? null : '/notifications';
+      }
       if (isEntryRoute || location == '/register' || location == '/verify') {
         return '/home';
       }
       return null;
     },
     routes: [
+      GoRoute(path: '/admin/announcements', builder: (context, state) => const AdminAnnouncementsScreen()),
+      GoRoute(path: '/admin/reports', builder: (context, state) => const AdminReportsScreen()),
+      GoRoute(path: '/admin/reports/:id', builder: (context, state) => TicketDetailScreen(
+        ticketId: state.pathParameters['id']!, admin: true)),
       GoRoute(path: '/', builder: (context, state) => const SplashScreen()),
       GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
       GoRoute(

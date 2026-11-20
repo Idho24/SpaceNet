@@ -33,6 +33,9 @@ migrate_working_dir/
 /build/
 /coverage/
 .env.firebase.local.json
+/android/app/google-services.json
+*service-account*.json
+supabase/.env.push*
 .env.supabase.local.json
 
 # Symbolication related

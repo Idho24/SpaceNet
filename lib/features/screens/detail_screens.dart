@@ -11,12 +11,15 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_components.dart';
 import '../../core/widgets/brand_logo.dart';
 import '../../data/mock/mock_repository.dart';
+import '../../data/repositories/support_repository.dart';
+import '../auth/auth_state.dart';
+export '../support/support_screens.dart' show TicketDetailScreen;
 import '../../data/models/invoice_model.dart';
 import '../../data/repositories/payment_history_repository.dart';
 import '../../data/repositories/customer_repository.dart';
 import '../../data/repositories/invoice_repository.dart';
 import '../../data/repositories/midtrans_payment_repository.dart';
-import '../../data/repositories/push_notification_repository.dart';
+export '../notifications/announcement_screens.dart' show NotificationsScreen, SettingsScreen;
 
 Future<void> _copyToClipboard(
   BuildContext context,
@@ -932,14 +935,14 @@ class _PlanCard extends StatelessWidget {
   }
 }
 
-class NewTicketScreen extends StatefulWidget {
+class NewTicketScreen extends ConsumerStatefulWidget {
   const NewTicketScreen({super.key});
 
   @override
-  State<NewTicketScreen> createState() => _NewTicketScreenState();
+  ConsumerState<NewTicketScreen> createState() => _NewTicketScreenState();
 }
 
-class _NewTicketScreenState extends State<NewTicketScreen> {
+class _NewTicketScreenState extends ConsumerState<NewTicketScreen> {
   final _formKey = GlobalKey<FormState>();
   final _descriptionController = TextEditingController();
   String _category = 'Internet lambat';
@@ -969,6 +972,7 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
         }
         return;
       }
+      supportPhotoType(bytes);
       if (!mounted) return;
       setState(() {
         _photoName = image.name;
@@ -981,25 +985,28 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
           'Foto tidak dapat dipilih. ${error.message ?? ''}',
         );
       }
-    } on Exception catch (error) {
-      if (mounted) showAppMessage(context, 'Foto tidak dapat dibaca. $error');
+    } catch (error) {
+      if (mounted) showAppMessage(context, error is StateError ? error.message : 'Foto tidak dapat dibaca.');
     }
   }
 
+  final String _requestId = newSupportId();
+  bool _attempted = false;
+
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _submitting = true);
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-    if (!mounted) return;
-    final ticket = ProviderScope.containerOf(context)
-        .read(mockRepositoryProvider)
-        .createTicket(
-          category: _category,
-          description: _descriptionController.text.trim(),
-          photoName: _photoName,
-          photoBytes: _photoBytes,
-        );
-    context.go('/tickets/${ticket.id}');
+    if (_submitting || !_formKey.currentState!.validate()) return;
+    setState(() { _submitting = true; _attempted = true; });
+    try {
+      final id = await ref.read(supportRepositoryProvider).create(
+        id: _requestId, category: _category,
+        description: _descriptionController.text.trim(), photo: _photoBytes);
+      ref.invalidate(supportTicketsProvider);
+      if (mounted) context.go('/tickets/$id');
+    } catch (error) {
+      if (mounted) showAppMessage(context, supportError(error));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   @override
@@ -1016,7 +1023,7 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
               subtitle: 'Tim dukungan akan menindaklanjuti laporan Anda.',
             ),
             const SizedBox(height: 22),
-            const _DetailRow(label: 'ID pelanggan', value: '0012995'),
+            _DetailRow(label: 'ID pelanggan', value: ref.watch(authNotifierProvider).user?.customerId ?? 'Belum terhubung'),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
               initialValue: _category,
@@ -1041,13 +1048,14 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
                         ),
                       )
                       .toList(),
-              onChanged: (value) {
+              onChanged: _submitting || _attempted ? null : (value) {
                 if (value != null) setState(() => _category = value);
               },
             ),
             const SizedBox(height: 16),
             TextFormField(
               controller: _descriptionController,
+              readOnly: _submitting || _attempted,
               maxLines: 5,
               maxLength: 500,
               decoration: const InputDecoration(
@@ -1061,7 +1069,7 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
-              onPressed: _photoBytes == null
+              onPressed: _submitting || _attempted ? null : _photoBytes == null
                   ? _pickPhoto
                   : () => setState(() {
                       _photoName = null;
@@ -1109,189 +1117,11 @@ class _NewTicketScreenState extends State<NewTicketScreen> {
             const SizedBox(height: 10),
             const _InfoNotice(
               text:
-                  'Tiket dan foto pada pratinjau tersimpan sementara di aplikasi, '
-                  'belum dikirim ke server.',
+                  'Laporan dikirim ke tim admin. Perkembangan penanganan dapat dilihat di menu Bantuan.',
             ),
           ],
         ),
       ),
-    );
-  }
-}
-
-class TicketDetailScreen extends ConsumerStatefulWidget {
-  final String ticketId;
-
-  const TicketDetailScreen({super.key, required this.ticketId});
-
-  @override
-  ConsumerState<TicketDetailScreen> createState() => _TicketDetailScreenState();
-}
-
-class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
-  final List<String> _comments = [];
-
-  Future<void> _addComment() async {
-    final controller = TextEditingController();
-    final comment = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Tambah komentar'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLength: 240,
-          decoration: const InputDecoration(
-            hintText: 'Tulis informasi tambahan...',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Batal'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (controller.text.trim().isNotEmpty) {
-                Navigator.pop(context, controller.text.trim());
-              }
-            },
-            child: const Text('Kirim'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (comment != null && mounted) setState(() => _comments.add(comment));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final repo = ref.watch(mockRepositoryProvider);
-    final ticket = repo.ticketById(widget.ticketId);
-    return Scaffold(
-      appBar: AppBar(title: const Text('Detail laporan')),
-      body: ticket == null
-          ? const EmptyState(
-              title: 'Tiket tidak ditemukan',
-              message: 'Tiket ini tidak tersedia di data pratinjau.',
-            )
-          : ListView(
-              padding: const EdgeInsets.all(20),
-              children: [
-                SurfaceCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        ticket.id,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      StatusPill(
-                        label: ticket.status,
-                        color: ticket.status == 'Selesai'
-                            ? AppTheme.success
-                            : AppTheme.warning,
-                      ),
-                      const SizedBox(height: 14),
-                      _DetailRow(label: 'Kategori', value: ticket.category),
-                      _DetailRow(label: 'Waktu laporan', value: ticket.date),
-                      const Divider(height: 26),
-                      Text(
-                        ticket.description,
-                        style: const TextStyle(height: 1.5),
-                      ),
-                      if (ticket.photoBytes case final photoBytes?) ...[
-                        const SizedBox(height: 14),
-                        Text(
-                          ticket.photoName ?? 'Lampiran foto',
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 8),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Image.memory(photoBytes, fit: BoxFit.cover),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-                const SectionHeading(title: 'Perkembangan laporan'),
-                const _TimelineEntry(
-                  title: 'Laporan diterima',
-                  subtitle: 'Tiket tercatat di aplikasi',
-                  completed: true,
-                ),
-                const _TimelineEntry(
-                  title: 'Sedang ditinjau',
-                  subtitle: 'Tim dukungan akan menghubungi Anda',
-                  completed: true,
-                ),
-                const _TimelineEntry(
-                  title: 'Penanganan teknisi',
-                  subtitle: 'Menunggu jadwal kunjungan',
-                  completed: false,
-                ),
-                const SizedBox(height: 12),
-                SectionHeading(
-                  title: 'Komentar',
-                  actionLabel: 'Tambah',
-                  onAction: _addComment,
-                ),
-                if (_comments.isEmpty)
-                  const Text(
-                    'Belum ada komentar tambahan.',
-                    style: TextStyle(color: AppTheme.textSecondary),
-                  )
-                else
-                  ..._comments.map(
-                    (comment) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: SurfaceCard(
-                        child: Text(
-                          comment,
-                          style: const TextStyle(height: 1.4),
-                        ),
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 14),
-                if (ticket.status != 'Dibatalkan' && ticket.status != 'Selesai')
-                  OutlinedButton(
-                    onPressed: () => showDialog<void>(
-                      context: context,
-                      builder: (dialogContext) => AlertDialog(
-                        title: const Text('Batalkan laporan?'),
-                        content: const Text(
-                          'Tiket demo akan ditandai dibatalkan.',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(dialogContext),
-                            child: const Text('Kembali'),
-                          ),
-                          TextButton(
-                            onPressed: () {
-                              ref
-                                  .read(mockRepositoryProvider)
-                                  .updateTicketStatus(ticket.id, 'Dibatalkan');
-                              Navigator.pop(dialogContext);
-                              setState(() {});
-                            },
-                            child: const Text('Batalkan tiket'),
-                          ),
-                        ],
-                      ),
-                    ),
-                    child: const Text('Batalkan laporan'),
-                  ),
-              ],
-            ),
     );
   }
 }
@@ -1307,7 +1137,7 @@ class TransactionsScreen extends ConsumerWidget {
         loading: () => const LoadingState(),
         error: (_, _) => ErrorState(onRetry: () => ref.invalidate(paymentHistoryProvider)),
         data: (transactions) => RefreshIndicator(
-          onRefresh: () async { await ref.refresh(paymentHistoryProvider.future); },
+          onRefresh: () async { ref.invalidate(paymentHistoryProvider); await ref.read(paymentHistoryProvider.future); },
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(20),
@@ -1462,162 +1292,6 @@ class TransactionDetailScreen extends ConsumerWidget {
       ),
     );
   }
-}
-
-class NotificationsScreen extends StatefulWidget {
-  const NotificationsScreen({super.key});
-
-  @override
-  State<NotificationsScreen> createState() => _NotificationsScreenState();
-}
-
-class _NotificationsScreenState extends State<NotificationsScreen> {
-  final Set<int> _readNotifications = {};
-  final List<_NotificationItem> _notifications = [
-    const _NotificationItem(
-      icon: Icons.receipt_long_outlined,
-      title: 'Tagihan Oktober tersedia',
-      message: 'Tagihan Rp 249.000 jatuh tempo 14 November 2026.',
-      date: 'Hari ini, 09.15',
-      color: AppTheme.warning,
-    ),
-    const _NotificationItem(
-      icon: Icons.engineering_outlined,
-      title: 'Pembaruan laporan gangguan',
-      message: 'Teknisi dijadwalkan untuk laporan SPN-2042.',
-      date: 'Kemarin, 16.20',
-      color: AppTheme.primaryBlue,
-    ),
-    const _NotificationItem(
-      icon: Icons.network_check_outlined,
-      title: 'Pemeliharaan jaringan',
-      message: 'Pemeliharaan terjadwal di area Bandung pada 8 November.',
-      date: '1 Nov 2026',
-      color: AppTheme.secondaryBlue,
-    ),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final unreadCount = _notifications.length - _readNotifications.length;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Notifikasi'),
-        actions: [
-          TextButton(
-            onPressed: _notifications.isEmpty
-                ? null
-                : () => setState(() {
-                    _readNotifications.addAll(
-                      List<int>.generate(
-                        _notifications.length,
-                        (index) => index,
-                      ),
-                    );
-                  }),
-            child: const Text('Tandai dibaca'),
-          ),
-        ],
-      ),
-      body: _notifications.isEmpty
-          ? const EmptyState(
-              title: 'Belum ada notifikasi',
-              message: 'Pembaruan layanan dan tagihan akan muncul di sini.',
-              icon: Icons.notifications_none_rounded,
-            )
-          : ListView(
-              padding: const EdgeInsets.all(20),
-              children: [
-                Text(
-                  unreadCount == 0
-                      ? 'Semua notifikasi sudah dibaca'
-                      : '$unreadCount belum dibaca',
-                  style: const TextStyle(color: AppTheme.textSecondary),
-                ),
-                const SizedBox(height: 12),
-                for (var index = 0; index < _notifications.length; index++)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: SurfaceCard(
-                      onTap: () =>
-                          setState(() => _readNotifications.add(index)),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          CircleAvatar(
-                            backgroundColor: _notifications[index].color
-                                .withValues(alpha: 0.1),
-                            child: Icon(
-                              _notifications[index].icon,
-                              color: _notifications[index].color,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        _notifications[index].title,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                    if (!_readNotifications.contains(index))
-                                      const Icon(
-                                        Icons.circle,
-                                        size: 9,
-                                        color: AppTheme.primaryBlue,
-                                      ),
-                                  ],
-                                ),
-                                const SizedBox(height: 5),
-                                Text(
-                                  _notifications[index].message,
-                                  style: const TextStyle(
-                                    color: AppTheme.textSecondary,
-                                    height: 1.4,
-                                  ),
-                                ),
-                                const SizedBox(height: 7),
-                                Text(
-                                  _notifications[index].date,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: AppTheme.textSecondary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-    );
-  }
-}
-
-class _NotificationItem {
-  final IconData icon;
-  final String title;
-  final String message;
-  final String date;
-  final Color color;
-
-  const _NotificationItem({
-    required this.icon,
-    required this.title,
-    required this.message,
-    required this.date,
-    required this.color,
-  });
 }
 
 class HelpScreen extends StatefulWidget {
@@ -1883,117 +1557,6 @@ class _FaqTile extends StatelessWidget {
   }
 }
 
-class SettingsScreen extends ConsumerStatefulWidget {
-  const SettingsScreen({super.key});
-
-  @override
-  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
-}
-
-class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  bool _billingNotifications = true;
-  bool _serviceNotifications = true;
-  bool _marketingNotifications = false;
-  bool _registeringNotifications = false;
-  bool _deviceRegistered = false;
-
-  Future<void> _setNotificationPreference(
-    bool enabled,
-    ValueChanged<bool> updatePreference,
-  ) async {
-    final repository = ref.read(pushNotificationRepositoryProvider);
-    if (!enabled || repository == null || _deviceRegistered) {
-      setState(() => updatePreference(enabled));
-      return;
-    }
-
-    setState(() => _registeringNotifications = true);
-    try {
-      final settings = await repository.requestPermission();
-      if (settings.authorizationStatus == AuthorizationStatus.denied) {
-        if (mounted) {
-          showAppMessage(context, 'Izin notifikasi belum diberikan.');
-        }
-        return;
-      }
-      await repository.registerDevice();
-      if (mounted) {
-        setState(() {
-          _deviceRegistered = true;
-          updatePreference(true);
-        });
-      }
-    } on Exception catch (error) {
-      if (mounted) {
-        showAppMessage(
-          context,
-          'Notifikasi tidak dapat diaktifkan. ${error.toString()}',
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _registeringNotifications = false);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Preferensi notifikasi')),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          const PageHeading(
-            title: 'Atur notifikasi',
-            subtitle: 'Pilih informasi yang ingin Anda terima',
-          ),
-          const SizedBox(height: 16),
-          SwitchListTile(
-            value: _billingNotifications,
-            onChanged: _registeringNotifications
-                ? null
-                : (value) => _setNotificationPreference(
-                    value,
-                    (enabled) => _billingNotifications = enabled,
-                  ),
-            title: const Text('Tagihan dan pembayaran'),
-            subtitle: const Text('Pengingat jatuh tempo dan status pembayaran'),
-          ),
-          SwitchListTile(
-            value: _serviceNotifications,
-            onChanged: _registeringNotifications
-                ? null
-                : (value) => _setNotificationPreference(
-                    value,
-                    (enabled) => _serviceNotifications = enabled,
-                  ),
-            title: const Text('Informasi layanan'),
-            subtitle: const Text('Status langganan, tiket, dan pemeliharaan'),
-          ),
-          SwitchListTile(
-            value: _marketingNotifications,
-            onChanged: _registeringNotifications
-                ? null
-                : (value) => _setNotificationPreference(
-                    value,
-                    (enabled) => _marketingNotifications = enabled,
-                  ),
-            title: const Text('Promo dan penawaran'),
-            subtitle: const Text('Informasi paket dan promosi terbaru'),
-          ),
-          const SizedBox(height: 14),
-          const _InfoNotice(
-            text:
-                'Preferensi kategori berlaku selama sesi ini. Izin perangkat '
-                'ditangani secara lokal untuk kebutuhan demo aplikasi.',
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class LegalScreen extends StatelessWidget {
   final String document;
 
@@ -2105,53 +1668,6 @@ class _DetailRow extends StatelessWidget {
                 fontWeight: emphasized ? FontWeight.w800 : FontWeight.w600,
                 fontSize: emphasized ? 17 : 14,
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TimelineEntry extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final bool completed;
-
-  const _TimelineEntry({
-    required this.title,
-    required this.subtitle,
-    required this.completed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        children: [
-          Icon(
-            completed ? Icons.check_circle : Icons.radio_button_unchecked,
-            color: completed ? AppTheme.success : AppTheme.textSecondary,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  subtitle,
-                  style: const TextStyle(
-                    color: AppTheme.textSecondary,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
             ),
           ),
         ],

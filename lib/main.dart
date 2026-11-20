@@ -6,6 +6,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/supabase/supabase_runtime_config.dart';
 import 'core/routing/app_router.dart';
 import 'core/theme/app_theme.dart';
+import 'data/repositories/push_notification_repository.dart';
+import 'features/notifications/push_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,6 +25,7 @@ Future<void> main() async {
     }
   }
 
+  await PushNotificationRepository.instance.initialize();
   runApp(
     ProviderScope(
       overrides: [
@@ -77,6 +80,7 @@ class SpaceNetApp extends ConsumerWidget {
       );
     }
 
+    ref.watch(pushControllerProvider);
     final router = ref.watch(routerProvider);
     return MaterialApp.router(
       title: 'SpaceNet Mobile',

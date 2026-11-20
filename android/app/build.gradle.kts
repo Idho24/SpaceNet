@@ -4,6 +4,12 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// The customer app remains buildable before Firebase is connected.
+// Download this Android app's configuration from the Firebase console.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.example.spacenet"
     compileSdk = flutter.compileSdkVersion
